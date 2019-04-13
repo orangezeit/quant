@@ -206,7 +206,7 @@ class heston(cox_intergell_ross):
             sigma(nu0): the market volatility                  unknown - iv:
             kappa:
             theta:
-            xi:
+            xi: the skewness
             rho: the correlation between two motions
 
             alpha: the damping factor
@@ -237,7 +237,7 @@ class heston(cox_intergell_ross):
 
         return np.exp(-self.r * self.t) * phi / (self.alpha + x * 1j) / (self.alpha + x * 1j + 1)
 
-    def fourier(self, n=65536, dv=0.01):
+    def fft(self, n=65536, dv=0.01):
 
         """ FFT """
 
@@ -251,54 +251,72 @@ class heston(cox_intergell_ross):
 
         return payoff, np.exp(k)
 
-    def optimize(self, n, s, t, k_m, c_m, method='equal_weight'):
+    def calibrate(self, n, sm, tm, km, cm, method='equal_weights'):
 
         """
-            optimization principle: given every (s, t), we only generate fft once
-
+            calibration principle: given every (s, t), we only generate fft once
+            
+            the orignial data structure is (s, t, k, c) for every option, we build a dictionary
+            with (s, t) [tuple] as indices, for each index, there is a set of pairs of (k, c), then
+            loop through the dictionary to calibrate
+            
             n: int / the length of the payoffs (or the strikes)
-            s: the initial price
-            t: the expiry
+            
+            sm: the market initial price
+            tm: the market expiry
+            km: np.array / the market strikes
+            cm: np.array / the market prices for options
 
-            k_m: np.array / the market strikes
-            c_m: np.array / the market prices for options
-
-            method: how to add errors, equal weights in default
+            method: how to add errors, 'equal_weights' in default
         """
-
+        d = {}
+        
+        for i in range(n):
+            if (sm[i], tm[i]) in d:
+                d[(sm[i], tm[i])].add((km[i], cm[i]))
+            else:
+                d[(sm[i], tm[i])] = set()
+        
         if method == 'equal_weights':
             weights = [1/n] * n
 
         def obj(x):
 
-            s = 0
-
-            """ x = [ s, k, payoff, t, sigma, nu0, kappa, rho, theta ] """
+            sse = 0
+            self.sigma, self.kappa, self.theta, self.xi, self.rho = x
+            """ x = [ sigma, kappa, theta, xi, rho ] """
+            
             n = 65536
+            dv = 0.01
 
-            p1, k1 = Heston(s0, 0.13, x[0], r, q, x[1], x[2], x[3], x[4], alpha).fourier()
-            p2, k2 = Heston(s0, 0.38, x[0], r, q, x[1], x[2], x[3], x[4], alpha).fourier()
-            p3, k3 = Heston(s0, 0.56, x[0], r, q, x[1], x[2], x[3], x[4], alpha).fourier()
+            for key, value in d.items():
+                self.s = key[0]
+                self.t = key[1]
+                payoff, strikes = self.fourier()
+                
+                for v in value:
+                    errs = [abs(strikes[i] - v[0]) for i in range(n)]
+                    s += 1
 
-            for i in range(len(prices)):
-
-                if i < 9:  # t = 0.13
-                    errs = [abs(strikes[i] - k1[j]) for j in range(n)]
-                    s += weights[i] * (p1[errs.index(min(errs))] - prices[i]) ** 2
-                elif i < 25:  # t = 0.38
-                    errs = [abs(strikes[i] - k2[j]) for j in range(n)]
-                    s += weights[i] * (p2[errs.index(min(errs))] - prices[i]) ** 2
-                else:  # t = 0.59
-                    errs = [abs(strikes[i] - k3[j]) for j in range(n)]
-                    s += weights[i] * (p3[errs.index(min(errs))] - prices[i]) ** 2
-
-            return s
+            return sse
     
     def simulate_2d(self, n=1000, output='num'):
         
         dt = self.t / n
         z1, z2 = 
-        vol_process = self.simulate_1d
+        vols = self.simulate_1d(z1, 1000, 'path', 'sigma', self.xi)
+        
+        if type == 'num':
+            x = self.s
+            for i in range(n):
+                x += self.r * x * dt + x * np.sqrt(vols[i] * dt) * z2[i]
+            return x
+        else:
+            record = np.zeros(n+1)
+            record[0] = self.s
+            for i in range(1, n+1):
+                record[i] += self.r * record[i-1] * dt + record[i-1] * np.sqrt(vols[i-1] * dt) * z2[i]
+            return record
 
 
 class sabr(cev):
