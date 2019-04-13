@@ -7,6 +7,15 @@ class stochastic:
     def __init__(self, s, r, sigma, t, q=0.0):
 
         """
+            The general stochastic process can be written as
+
+            dx = mu(x,t) * dt + v(x,t) * dW
+
+            where
+                x is the object of the process
+                mu is the drift
+                v is the volatility
+
             s: the (initial) price of underlying assets
             r: the (initial) risk-free interest rate
             sigma: the volatility
@@ -31,6 +40,41 @@ class ornstein_uhlenbeck(stochastic):
         self.kappa = kappa
         self.theta = theta
 
+    def simulate_1d(self, z, n=1000, type='num', obj='r', xi=0.0):
+
+        """
+            Usually the OU process is an interest rate model
+            it could be used to simulate the volatility in 2d model, in which we need
+            xi as the volatility of volatility (skewness)
+
+            n: the number of randoms
+            z: sample from the standard normal distribution (possibly correlated with other distribution)
+            type: whether the output is a final value or a path
+            obj: the object of the process, 'r' in default, could change to 'sigma'
+            xi: required if obj is 'sigma'
+        """
+
+        dt = self.t / n
+
+        if obj == 'r':
+            x = self.r
+            sigma = self.sigma
+        else:
+            x = self.sigma
+            sigma = xi
+
+        if type == 'num':
+            for i in range(n):
+                x += self.kappa * (self.theta - x) * dt + sigma * np.sqrt(x) np.sqrt(dt) * z[i]
+            return x
+        else:
+            record = np.zeros(n+1)
+            record[0] = x
+            for i in range(1, n+1):
+                record[i] += self.kappa * (self.theta - record[i-1]) * dt + sigma * np.sqrt(dt) * z[i]
+            return record
+
+
 
 class cox_intergell_ross(stochastic):
 
@@ -42,18 +86,67 @@ class cox_intergell_ross(stochastic):
         self.kappa = kappa
         self.theta = theta
 
+    def simulate_1d(self, z, n=1000, type='num', obj='r', xi=0.0, method='cutoff'):
+
+        """
+            Usually the OU process is an interest rate model
+            it could be used to simulate the volatility in 2d model, in which we need
+            xi as the volatility of volatility (skewness)
+
+            n: the number of randoms
+            z: sample from the standard normal distribution (possibly correlated with other distribution)
+            type: whether the output is a final value or a path
+            obj: the object of the process, 'r' in default, could change to 'sigma'
+            xi: required if obj is 'sigma'
+            method: decision to make if simulated volatility is less than 0
+        """
+
+        dt = self.t / n
+
+        if obj == 'r':
+            x = self.r
+            sigma = self.sigma
+        else:
+            x = self.sigma
+            sigma = xi
+
+        if type == 'num':
+            for i in range(n):
+                x += self.kappa * (self.theta - x) * dt + sigma * np.sqrt(max(x,0)) * np.sqrt(dt) * z[i]
+            return x
+        else:
+            record = np.zeros(n+1)
+            record[0] = x
+            for i in range(1, n+1):
+                record[i] += self.kappa * (self.theta - record[i-1]) * dt + sigma * np.sqrt(max(x,0)) * np.sqrt(dt) * z[i]
+            return record
+
 
 class cev(stochastic):
 
     def __init__(self, s, r, sigma, t, beta, k, q=0.0):
 
+        """ model for the price of the underlying asset """
+
         stochastic.__init__(self, s, r, sigma, t, q)
         self.beta = beta
         self.k = k
 
-    def simulation(self):
-        pass
+    def simulation_1d(self, z, n=1000, type='num'):
 
+        dt = self.t / n
+        x = self.s
+
+        if type == 'num':
+            for i in range(n):
+                x += self.r * x * dt + sigma * self.sigma * np.sqrt(dt) * z[i] * x ** beta
+            return x
+        else:
+            record = np.zeros(n+1)
+            record[0] = x
+            for i in range(1, n+1):
+                record[i] += self.r * record[i-1] * dt + sigma * self.sigma * np.sqrt(dt) * z[i] * record[i-1] ** beta
+            return record
 
 
 class black_scholes(cev):
@@ -74,8 +167,7 @@ class black_scholes(cev):
             return 1
 
 
-
-class heston(stochastic):
+class heston(cox_intergell_ross):
 
     def __init__(self, sigma, kappa, theta, xi, rho, s, r, t, alpha=2, q=0.0):
 
