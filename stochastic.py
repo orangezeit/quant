@@ -226,13 +226,19 @@ class heston(cox_intergell_ross):
 
         return payoff, np.exp(k)
 
-    def optimize(self, n, s_m, k_m, payoff_m, t_m, method='equal_weight'):
+    def optimize(self, n, s, t, k_m, c_m, method='equal_weight'):
 
         """
-            n: int / the number of
+            optimization principle: given every (s, t), we only generate fft once
+
+            n: int / the length of the payoffs (or the strikes)
+            s: the initial price
+            t: the expiry
+
             k_m: np.array / the market strikes
-            payoff_m: np.array / the market prices for options
-            t_m: np.array / the time / increasing order
+            c_m: np.array / the market prices for options
+
+            method: how to add errors, equal weights in default
         """
 
         if method == 'equal_weights':
