@@ -199,18 +199,18 @@ class heston(cox_intergell_ross):
     def __init__(self, sigma, kappa, theta, xi, rho, s, r, t, alpha=2, q=0.0):
 
         """
-            s: the initial underlying asset price              known
-            r: the risk-free interest rate                     known - The Treasury Bill rate
-            t: the expiry                                      known
+            s: the initial underlying asset price              known - given by the market
+            r: the risk-free interest rate                     known - assuming Treasury Bill rate
+            t: the expiry                                      known - given by the market
 
-            sigma(nu0): the market volatility                  unknown - iv:
+            sigma(nu0): the market volatility                  unknown
             kappa:
             theta:
-            xi: the skewness
-            rho: the correlation between two motions
+            xi(sigma): the skewness
+            rho: the correlation between two motions           unknown [-1, 1]
 
-            alpha: the damping factor
-            q: the dividend rate
+            alpha: the damping factor                          required for FFT
+            q: the dividend rate                               optional
         """
 
         cox_intergell_ross.__init__(self, r, sigma, t, kappa, theta, s, q)
@@ -247,18 +247,51 @@ class heston(cox_intergell_ross):
         y = np.fft.fft(x)
 
         k = [np.log(self.s) + 2 * np.pi / (n * dv) * (i - n / 2) for i in range(n)]
-        payoff = [np.exp(-self.alpha * k[i]) / np.pi * y[i].real for i in range(n)]
+        payoffs = [np.exp(-self.alpha * k[i]) / np.pi * y[i].real for i in range(n)]
 
-        return payoff, np.exp(k)
-
-    def calibrate(self, n, sm, tm, km, cm, method='equal_weights'):
+        return payoffs, np.exp(k)
+    
+    def price(self, combo, k):
+        
+        """ 
+            Given the payoffs and strikes (combo) from FFT, find the model price for the strike k
+            
+                Find the desired strikes range by the binary search
+                Linearly interpolate in the corresponding payoffs range and output the price
+        """
+        
+        payoffs, strikes = combo
+        
+        l = 0
+        r = len(strikes)-1
+        
+        while r - l > 1:
+            
+            m = (r - l) // 2
+            if strikes[m] <= k:
+                l = m
+            else:
+                r = m
+        
+        slope = (payoffs[r] - payoffs[l]) / (strikes[r] - strikes[l])
+        
+        return payoffs[l] + slope * (k - strikes[l])
+        
+    def calibrate(self, n, sm, tm, km, cm, method='equal_weights', diffs=None):
 
         """
-            calibration principle: given every (s, t), we only generate fft once
+            calibration principle: only generate fft once for each pair of (s, t)
             
-            the orignial data structure is (s, t, k, c) for every option, we build a dictionary
-            with (s, t) [tuple] as indices, for each index, there is a set of pairs of (k, c), then
-            loop through the dictionary to calibrate
+            Step One: Data Reconstruction - from {(s,t,k,c)} to {(s,t): {(k,c)}}
+            
+                orignial data structure is tuple (s, t, k, c) for every option
+                build dictionary d with tuple (s, t) as key
+                for each key, the value is a set of pairs of (k, c)
+                
+            Step Two: Define the Object Function
+            
+            Step Three: Optimize
+                loop through the dictionary to calibrate
             
             n: int / the length of the payoffs (or the strikes)
             
@@ -268,37 +301,34 @@ class heston(cox_intergell_ross):
             cm: np.array / the market prices for options
 
             method: how to add errors, 'equal_weights' in default
+            diffs: None in default
         """
+        
         d = {}
         
         for i in range(n):
-            if (sm[i], tm[i]) in d:
-                d[(sm[i], tm[i])].add((km[i], cm[i]))
-            else:
-                d[(sm[i], tm[i])] = set()
-        
-        if method == 'equal_weights':
-            weights = [1/n] * n
+            d.setdefault((sm[i], tm[i]), set()).add((km[i], cm[i]))
 
         def obj(x):
-
+            """ 
+                x = [ sigma, kappa, theta, xi, rho ]
+            """
             sse = 0
-            self.sigma, self.kappa, self.theta, self.xi, self.rho = x
-            """ x = [ sigma, kappa, theta, xi, rho ] """
-            
-            n = 65536
-            dv = 0.01
+            # self.sigma, self.kappa, self.theta, self.xi, self.rho = x
 
             for key, value in d.items():
-                self.s = key[0]
-                self.t = key[1]
-                payoff, strikes = self.fourier()
+                self.s, self.t = key
+                combo = self.fourier()
                 
-                for v in value:
-                    errs = [abs(strikes[i] - v[0]) for i in range(n)]
-                    s += 1
+                for k, c in value:
+                    
+                    sse += (c - self.price(combo, k)) ** 2
 
             return sse
+        
+        x = self.sigma, self.kappa, self.theta, self.xi, self.rho
+        sol = minimize(obj, x, method='SLSOP')
+        print(sol.x)
     
     def simulate_2d(self, n=1000, output='num'):
         
@@ -340,8 +370,8 @@ class sabr(cev):
 
         def obj(x):
 
-            self.alpha, self.beta, self.rho = x
-            s = 0
+            # self.alpha, self.beta, self.rho = x
+            sse = 0
 
             for i in range(n):
                 p = (s_m[i] * k_m[i]) ** ((1 - self.beta) / 2)
@@ -354,23 +384,19 @@ class sabr(cev):
                          / (4 * p) + self.alpha ** 2 * (2 - 3 * self.rho ** 2) / 24) * t
                 b = 1 + (1 - self.beta) ** 2 * q ** 2 / 24 + (1 - self.beta) ** 4 * q ** 4 / 1920
 
-                var_k = self.alpha * q / x * a / b
+                vol = self.alpha * q / x * a / b
 
-                s += (var_k - sigma_m[i]) ** 2
+                sse += (vol - sigma_m[i]) ** 2
 
-            return s
+            return sse
 
-        x1 = self.alpha, self.beta, self.rho
+        x = self.alpha, self.beta, self.rho, self.sigma
 
-        sol = minimize(obj, x1, method='SLSQP')
+        sol = minimize(obj, x, method='SLSQP')
 
         print(sol.x)
 
-
-
-
-
-
+        
 sigma = 2.3467724
 nu0 = 0.05211403
 kappa = 3.1926385
