@@ -9,12 +9,13 @@ class stochastic:
         """
             The general stochastic process can be written as
 
-            dx = mu(x,t) * dt + v(x,t) * dW
+                dx = mu(x, t) * dt + v(x, t) * dW
 
             where
+            
                 x is the object of the process
-                mu is the drift
-                v is the volatility
+                mu(x, t) is the drift
+                v(x, t) is the volatility
 
             s: the (initial) price of underlying assets
             r: the (initial) risk-free interest rate
@@ -32,26 +33,37 @@ class stochastic:
 
 class ornstein_uhlenbeck(stochastic):
 
-    """ Vasicek process (interest rate model) """
+    """
+        also known as Vasicek process
+        mainly used as the interest rate model
+    """
 
-    def __init__(self, r, sigma, t, kappa, theta, q=0.0):
-
-        stochastic.__init__(self, 0, r, sigma, t, q)
+    def __init__(self, r, sigma, t, kappa, theta, s=0.0, q=0.0):
+        
+        """
+            kappa: the speed of the mean reversion
+            theta: the level of the mean reversion
+        """
+        
+        stochastic.__init__(self, s, r, sigma, t, q)
         self.kappa = kappa
         self.theta = theta
 
-    def simulate_1d(self, z, n=1000, type='num', obj='r', xi=0.0):
+    def simulate_1d(self, z, n=1000, output='num', obj='r', xi=0.0):
 
         """
-            Usually the OU process is an interest rate model
-            it could be used to simulate the volatility in 2d model, in which we need
-            xi as the volatility of volatility (skewness)
+            mostly an interest rate model
+            could be used to simulate the volatility in 2d model, where
+            xi is required as the volatility of volatility (skewness)
 
-            n: the number of randoms
-            z: sample from the standard normal distribution (possibly correlated with other distribution)
-            type: whether the output is a final value or a path
-            obj: the object of the process, 'r' in default, could change to 'sigma'
-            xi: required if obj is 'sigma'
+            z: sample from the standard normal distribution
+                possibly correlated with other distributions and that's why it is an input
+            n: the number of randoms, 1000 in default
+            output: the final value ('num') or the entire simulation ('path')
+                'num' in default
+            obj: the object of the process, the interest rate 'r' or the volatility 'sigma'
+                'r' in default
+            xi: skewness, required if obj is 'sigma', 0.0 in default
         """
 
         dt = self.t / n
@@ -75,30 +87,37 @@ class ornstein_uhlenbeck(stochastic):
             return record
 
 
-
 class cox_intergell_ross(stochastic):
 
-    """ interest rate model """
+    """ mainly used as the interest rate model """
 
-    def __init__(self, r, sigma, t, kappa, theta, q=0.0):
+    def __init__(self, r, sigma, t, kappa, theta, s=0.0, q=0.0):
 
-        stochastic.__init__(self, 0, r, sigma, t, q)
+        """
+            kappa: the speed of the mean reversion
+            theta: the level of the mean reversion
+        """
+        
+        stochastic.__init__(self, s, r, sigma, t, q)
         self.kappa = kappa
         self.theta = theta
 
-    def simulate_1d(self, z, n=1000, type='num', obj='r', xi=0.0, method='cutoff'):
+    def simulate_1d(self, z, n=1000, output='num', obj='r', xi=0.0, method='cutoff'):
 
         """
-            Usually the OU process is an interest rate model
-            it could be used to simulate the volatility in 2d model, in which we need
-            xi as the volatility of volatility (skewness)
+            mostly an interest rate model
+            could be used to simulate the volatility in 2d model, where
+            xi is required as the volatility of volatility (skewness)
 
-            n: the number of randoms
-            z: sample from the standard normal distribution (possibly correlated with other distribution)
-            type: whether the output is a final value or a path
-            obj: the object of the process, 'r' in default, could change to 'sigma'
-            xi: required if obj is 'sigma'
-            method: decision to make if simulated volatility is less than 0
+            z: sample from the standard normal distribution
+                possibly correlated with other distributions and that's why it is an input
+            n: the number of randoms, 1000 in default
+            output: the final value ('num') or the entire simulation ('path')
+                'num' in default
+            obj: the object of the process, the interest rate 'r' or the volatility 'sigma'
+                'r' in default
+            xi: skewness, required if obj is 'sigma', 0.0 in default
+            method: decision to make if simulated object is less than 0
         """
 
         dt = self.t / n
@@ -123,27 +142,34 @@ class cox_intergell_ross(stochastic):
 
 
 class cev(stochastic):
+    
+    """ model for the price of the underlying asset """
 
     def __init__(self, s, r, sigma, t, beta, k, q=0.0):
 
-        """ model for the price of the underlying asset """
-
+        """
+            beta: skewness of volatility surface
+                if beta = 0, 
+                if beta = 1, Black-Scholes model
+            k: the strike
+        """
+        
         stochastic.__init__(self, s, r, sigma, t, q)
         self.beta = beta
         self.k = k
 
-    def simulation_1d(self, z, n=1000, type='num'):
+    def simulate_1d(self, z, n=1000, output='num'):
 
         dt = self.t / n
-        x = self.s
 
         if type == 'num':
+            x = self.s
             for i in range(n):
                 x += self.r * x * dt + sigma * self.sigma * np.sqrt(dt) * z[i] * x ** beta
             return x
         else:
             record = np.zeros(n+1)
-            record[0] = x
+            record[0] = self.s
             for i in range(1, n+1):
                 record[i] += self.r * record[i-1] * dt + sigma * self.sigma * np.sqrt(dt) * z[i] * record[i-1] ** beta
             return record
@@ -152,17 +178,18 @@ class cev(stochastic):
 class black_scholes(cev):
 
     def __init__(self, s, r, sigma, t, k, q=0.0):
-
+        
+        """ d1 and d2 are constants for closed-form solution """
+        
         cev.__init__(self, s, r, sigma, t, 1, k, q)
+        self.d1 = (np.log(s / k) + (r + sigma ** 2 / 2) * t) / (sigma * np.sqrt(t))
+        self.d2 = self.d1 - sigma * np.sqrt(t)
 
     def euro_option(self, option='call', output='value'):    # black scholes formula
 
-        d1 = (np.log(self.s / self.k) + (self.r + self.sigma ** 2 / 2) * self.t) / (self.sigma * np.sqrt(self.t))
-        d2 = d1 - self.sigma * np.sqrt(self.t)
-
         if option == 'call':
             if output == 'value':
-                return norm.cdf(d1) * self.s * np.exp(-self.q * self.t) - norm.cdf(d2) * self.k * np.exp(-self.r * self.t)
+                return norm.cdf(self.d1) * self.s - norm.cdf(self.d2) * self.k * np.exp(-self.r * self.t)
         else:  # put
             return 1
 
@@ -186,9 +213,7 @@ class heston(cox_intergell_ross):
             q: the dividend rate
         """
 
-        stochastic.__init__(self, s, r, sigma, t, q)
-        self.kappa = kappa
-        self.theta = theta
+        cox_intergell_ross.__init__(self, r, sigma, t, kappa, theta, s, q)
         self.xi = xi # sigma
         self.rho = rho
         self.alpha = alpha   # damping factor
@@ -268,6 +293,12 @@ class heston(cox_intergell_ross):
                     s += weights[i] * (p3[errs.index(min(errs))] - prices[i]) ** 2
 
             return s
+    
+    def simulate_2d(self, n=1000, output='num'):
+        
+        dt = self.t / n
+        z1, z2 = 
+        vol_process = self.simulate_1d
 
 
 class sabr(cev):
