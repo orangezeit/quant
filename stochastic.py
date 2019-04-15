@@ -3,6 +3,7 @@ import pandas as pd
 from scipy.stats import norm
 from scipy.optimize import minimize
 
+
 class Stochastic:
 
     def __init__(self, s, r, sigma, t, q=0.0):
@@ -163,7 +164,6 @@ class CEV(Stochastic):
 class BlackScholes(CEV):
 
     def __init__(self, s, r, sigma, t, q=0.0):
-        
         CEV.__init__(self, s, r, sigma, t, 1, q)
 
     def euro_option(self, k, option='call', output='value'):
@@ -180,23 +180,20 @@ class BlackScholes(CEV):
             return 1
 
 
+class Bachelier(CEV):
+
+    def __init__(self, s, r, sigma, t, q=0.0):
+        CEV.__init__(self, s, r, sigma, t, 0, q)
+
+
 class Heston(CoxIntergellRoss):
 
     def __init__(self, sigma, kappa, theta, xi, rho, s, r, t, alpha=2, q=0.0):
 
         """
-            s: the initial underlying asset price              known - given by the market
-            r: the risk-free interest rate                     known - assuming Treasury Bill rate
-            t: the expiry                                      known - given by the market
-
-            sigma(nu0): the market volatility                  unknown
-            kappa:
-            theta:
             xi(sigma): the skewness
-            rho: the correlation between two motions           unknown [-1, 1]
-
-            alpha: the damping factor                          required for FFT
-            q: the dividend rate                               optional
+            rho: the correlation between two motions
+            alpha: the damping factor
         """
 
         CoxIntergellRoss.__init__(self, r, sigma, t, kappa, theta, s, q)
@@ -210,14 +207,16 @@ class Heston(CoxIntergellRoss):
 
         x -= (self.alpha + 1) * 1j
 
+        # intermediate variables
         a = x ** 2 + 1j * x
         b = self.kappa - 1j * self.rho * self.xi * x
+        c = self.kappa * self.theta / self.xi ** 2
         lbd = np.sqrt(self.xi ** 2 * a + b ** 2)
-        c = np.sinh(lbd * self.t / 2)
-        d = np.cosh(lbd * self.t / 2)
+        d = np.sinh(lbd * self.t / 2)
+        e = np.cosh(lbd * self.t / 2)
 
-        phi = np.exp(1j * x * (np.log(self.s) + self.r * self.t) + self.kappa * self.theta * self.t * b / self.xi ** 2
-                     - a * self.sigma / (lbd * d / c + b)) / (d + b * c / lbd) ** (2 * self.kappa * self.theta / self.xi ** 2)
+        phi = np.exp(1j * x * (np.log(self.s) + self.r * self.t) + self.t * b * c
+                     - a * self.sigma / (lbd * e / d + b)) / (e + b * d / lbd) ** (2 * c)
 
         x += (self.alpha + 1) * 1j
 
@@ -248,22 +247,22 @@ class Heston(CoxIntergellRoss):
         
         payoffs, strikes = combo
         
-        l = 0
-        r = len(strikes)-1
+        left = 0
+        right = len(strikes)-1
         
-        while r - l > 1:
+        while right - left > 1:
             
-            m = (r - l) // 2
-            if strikes[m] <= k:
-                l = m
+            mid = (right - left) // 2
+            if strikes[mid] <= k:
+                left = mid
             else:
-                r = m
+                right = mid
         
-        slope = (payoffs[r] - payoffs[l]) / (strikes[r] - strikes[l])
+        slope = (payoffs[right] - payoffs[left]) / (strikes[right] - strikes[left])
         
-        return payoffs[l] + slope * (k - strikes[l])
+        return payoffs[left] + slope * (k - strikes[left])
         
-    def calibrate(self, n, sm, tm, km, cm, method='equal_weights', diffs=None):
+    def calibrate(self, n, sm, tm, km, cm):
 
         """
             calibration principle: only generate fft once for each pair of (s, t)
@@ -285,9 +284,6 @@ class Heston(CoxIntergellRoss):
             tm: the market expiry
             km: np.array / the market strikes
             cm: np.array / the market prices for options
-
-            method: how to add errors, 'equal_weights' in default
-            diffs: None in default
         """
         
         d = {}
@@ -352,13 +348,12 @@ class SABR(CEV):
         self.alpha = alpha
         self.rho = rho
 
-    def calibrate(self, n, sigma_m, s_m, k_m, t, method='equal_weight'):
+    def calibrate(self, n, sigma_m, s_m, k_m, t):
 
         """
             calibrate for every expiry
             sigma_m: the market volatility
             k_m: the market strike
-            method: equal weights or weighted
 
             Note that self.sigma is the initial volatility (how to determine)
         """
