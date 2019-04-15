@@ -1,8 +1,9 @@
 import numpy as np
 import pandas as pd
 from scipy.stats import norm
+from scipy.optimize import minimize
 
-class stochastic:
+class Stochastic:
 
     def __init__(self, s, r, sigma, t, q=0.0):
 
@@ -28,10 +29,9 @@ class stochastic:
         self.r = r-q
         self.sigma = sigma
         self.t = t
-        self.q = q
 
 
-class ornstein_uhlenbeck(stochastic):
+class OrnsteinUhlenbeck(Stochastic):
 
     """
         also known as Vasicek process
@@ -45,49 +45,36 @@ class ornstein_uhlenbeck(stochastic):
             theta: the level of the mean reversion
         """
         
-        stochastic.__init__(self, s, r, sigma, t, q)
+        Stochastic.__init__(self, s, r, sigma, t, q)
         self.kappa = kappa
         self.theta = theta
 
-    def simulate_1d(self, z, n=1000, output='num', obj='r', xi=0.0):
+    def simulate(self, n=1000, output='num'):
 
         """
-            mostly an interest rate model
-            could be used to simulate the volatility in 2d model, where
-            xi is required as the volatility of volatility (skewness)
-
-            z: sample from the standard normal distribution
-                possibly correlated with other distributions and that's why it is an input
-            n: the number of randoms, 1000 in default
+            n: the number of randoms
+                1000 in default
             output: the final value ('num') or the entire simulation ('path')
                 'num' in default
-            obj: the object of the process, the interest rate 'r' or the volatility 'sigma'
-                'r' in default
-            xi: skewness, required if obj is 'sigma', 0.0 in default
         """
 
         dt = self.t / n
+        z = np.random.normal(n)
 
-        if obj == 'r':
-            x = self.r
-            sigma = self.sigma
-        else:
-            x = self.sigma
-            sigma = xi
-
-        if type == 'num':
+        if output == 'num':
+            r = self.r
             for i in range(n):
-                x += self.kappa * (self.theta - x) * dt + sigma * np.sqrt(x) np.sqrt(dt) * z[i]
-            return x
+                r += self.kappa * (self.theta - r) * dt + self.sigma * np.sqrt(dt) * z[i]
+            return r
         else:
             record = np.zeros(n+1)
-            record[0] = x
-            for i in range(1, n+1):
-                record[i] += self.kappa * (self.theta - record[i-1]) * dt + sigma * np.sqrt(dt) * z[i]
+            record[0] = self.r
+            for i in range(n):
+                record[i+1] = record[i] + self.kappa * (self.theta - record[i]) * dt + self.sigma * np.sqrt(dt) * z[i]
             return record
 
 
-class cox_intergell_ross(stochastic):
+class CoxIntergellRoss(Stochastic):
 
     """ mainly used as the interest rate model """
 
@@ -98,54 +85,44 @@ class cox_intergell_ross(stochastic):
             theta: the level of the mean reversion
         """
         
-        stochastic.__init__(self, s, r, sigma, t, q)
+        Stochastic.__init__(self, s, r, sigma, t, q)
         self.kappa = kappa
         self.theta = theta
 
-    def simulate_1d(self, z, n=1000, output='num', obj='r', xi=0.0, method='cutoff'):
+    def simulate(self, n=1000, output='num'):
 
         """
-            mostly an interest rate model
-            could be used to simulate the volatility in 2d model, where
-            xi is required as the volatility of volatility (skewness)
-
-            z: sample from the standard normal distribution
-                possibly correlated with other distributions and that's why it is an input
-            n: the number of randoms, 1000 in default
+            n: the number of randoms
+                1000 in default
             output: the final value ('num') or the entire simulation ('path')
                 'num' in default
-            obj: the object of the process, the interest rate 'r' or the volatility 'sigma'
-                'r' in default
-            xi: skewness, required if obj is 'sigma', 0.0 in default
-            method: decision to make if simulated object is less than 0
         """
 
         dt = self.t / n
+        z = np.random.normal(n)
 
-        if obj == 'r':
-            x = self.r
-            sigma = self.sigma
-        else:
-            x = self.sigma
-            sigma = xi
+        if output == 'num':
+            r = self.r
 
-        if type == 'num':
             for i in range(n):
-                x += self.kappa * (self.theta - x) * dt + sigma * np.sqrt(max(x,0)) * np.sqrt(dt) * z[i]
-            return x
+                r += self.kappa * (self.theta - r) * dt + self.sigma * np.sqrt(max(r, 0) * dt) * z[i]
+
+            return r
         else:
             record = np.zeros(n+1)
-            record[0] = x
-            for i in range(1, n+1):
-                record[i] += self.kappa * (self.theta - record[i-1]) * dt + sigma * np.sqrt(max(x,0)) * np.sqrt(dt) * z[i]
+            record[0] = self.r
+
+            for i in range(n):
+                record[i+1] = record[i] + self.kappa * (self.theta - record[i]) * dt \
+                              + self.sigma * np.sqrt(max(record[i], 0) * dt) * z[i]
             return record
 
 
-class cev(stochastic):
+class CEV(Stochastic):
     
     """ model for the price of the underlying asset """
 
-    def __init__(self, s, r, sigma, t, beta, k, q=0.0):
+    def __init__(self, s, r, sigma, t, beta, q=0.0):
 
         """
             beta: skewness of volatility surface
@@ -154,47 +131,56 @@ class cev(stochastic):
             k: the strike
         """
         
-        stochastic.__init__(self, s, r, sigma, t, q)
+        Stochastic.__init__(self, s, r, sigma, t, q)
         self.beta = beta
-        self.k = k
 
-    def simulate_1d(self, z, n=1000, output='num'):
+    def simulate(self, n=1000, output='num'):
+
+        """
+            n: the number of randoms
+                1000 in default
+            output: the final value ('num') or the entire simulation ('path')
+                'num' in default
+        """
 
         dt = self.t / n
+        z = np.random.normal(n)
 
-        if type == 'num':
-            x = self.s
+        if output == 'num':
+            s = self.s
             for i in range(n):
-                x += self.r * x * dt + sigma * self.sigma * np.sqrt(dt) * z[i] * x ** beta
-            return x
+                s += self.r * s * dt + self.sigma * np.sqrt(dt) * z[i] * s ** self.beta
+            return s
         else:
             record = np.zeros(n+1)
             record[0] = self.s
-            for i in range(1, n+1):
-                record[i] += self.r * record[i-1] * dt + sigma * self.sigma * np.sqrt(dt) * z[i] * record[i-1] ** beta
+            for i in range(n):
+                record[i+1] = record[i] + self.r * record[i] * dt \
+                              + self.sigma * np.sqrt(dt) * z[i] * record[i] ** self.beta
             return record
 
 
-class black_scholes(cev):
+class BlackScholes(CEV):
 
-    def __init__(self, s, r, sigma, t, k, q=0.0):
+    def __init__(self, s, r, sigma, t, q=0.0):
         
+        CEV.__init__(self, s, r, sigma, t, 1, q)
+
+    def euro_option(self, k, option='call', output='value'):
+
         """ d1 and d2 are constants for closed-form solution """
-        
-        cev.__init__(self, s, r, sigma, t, 1, k, q)
-        self.d1 = (np.log(s / k) + (r + sigma ** 2 / 2) * t) / (sigma * np.sqrt(t))
-        self.d2 = self.d1 - sigma * np.sqrt(t)
 
-    def euro_option(self, option='call', output='value'):    # black scholes formula
+        d1 = (np.log(self.s / k) + (self.r + self.sigma ** 2 / 2) * self.t) / (self.sigma * np.sqrt(self.t))
+        d2 = d1 - self.sigma * np.sqrt(self.t)
 
         if option == 'call':
             if output == 'value':
-                return norm.cdf(self.d1) * self.s - norm.cdf(self.d2) * self.k * np.exp(-self.r * self.t)
+                return norm.cdf(d1) * self.s - norm.cdf(d2) * k * np.exp(-self.r * self.t)
         else:  # put
             return 1
 
 
-class heston(cox_intergell_ross):
+class Heston(CoxIntergellRoss):
 
     def __init__(self, sigma, kappa, theta, xi, rho, s, r, t, alpha=2, q=0.0):
 
@@ -213,10 +199,10 @@ class heston(cox_intergell_ross):
             q: the dividend rate                               optional
         """
 
-        cox_intergell_ross.__init__(self, r, sigma, t, kappa, theta, s, q)
-        self.xi = xi # sigma
+        CoxIntergellRoss.__init__(self, r, sigma, t, kappa, theta, s, q)
+        self.xi = xi
         self.rho = rho
-        self.alpha = alpha   # damping factor
+        self.alpha = alpha
 
     def psi(self, x):
 
@@ -239,7 +225,7 @@ class heston(cox_intergell_ross):
 
     def fft(self, n=65536, dv=0.01):
 
-        """ FFT """
+        """ Fast Fourier Transform """
 
         weights = [dv / 2 if i == 0 else dv for i in range(n)]
         x = [np.exp(-1j * i * (dv * np.log(self.s) - np.pi)) * self.psi(i * dv) * weights[i] for i in range(n)]
@@ -247,11 +233,11 @@ class heston(cox_intergell_ross):
         y = np.fft.fft(x)
 
         k = [np.log(self.s) + 2 * np.pi / (n * dv) * (i - n / 2) for i in range(n)]
-        payoffs = [np.exp(-self.alpha * k[i]) / np.pi * y[i].real for i in range(n)]
+        payoffs = [np.exp(-self.alpha * k[i]) / np.pi for i in range(n)]
 
-        return payoffs, np.exp(k)
+        return payoffs * y.real, np.exp(k)
     
-    def price(self, combo, k):
+    def payoff(self, combo, k):
         
         """ 
             Given the payoffs and strikes (combo) from FFT, find the model price for the strike k
@@ -284,7 +270,7 @@ class heston(cox_intergell_ross):
             
             Step One: Data Reconstruction - from {(s,t,k,c)} to {(s,t): {(k,c)}}
             
-                orignial data structure is tuple (s, t, k, c) for every option
+                original data structure is tuple (s, t, k, c) for every option
                 build dictionary d with tuple (s, t) as key
                 for each key, the value is a set of pairs of (k, c)
                 
@@ -309,55 +295,64 @@ class heston(cox_intergell_ross):
         for i in range(n):
             d.setdefault((sm[i], tm[i]), set()).add((km[i], cm[i]))
 
-        def obj(x):
-            """ 
-                x = [ sigma, kappa, theta, xi, rho ]
-            """
+        def obj():
+
+            """ x = [ sigma, kappa, theta, xi, rho ] """
+
+            self.sigma, self.kappa, self.theta, self.xi, self.rho = x
             sse = 0
-            # self.sigma, self.kappa, self.theta, self.xi, self.rho = x
 
             for key, value in d.items():
                 self.s, self.t = key
-                combo = self.fourier()
+                combo = self.fft()
                 
                 for k, c in value:
-                    
-                    sse += (c - self.price(combo, k)) ** 2
+                    sse += (c - self.payoff(combo, k)) ** 2
 
             return sse
         
-        x = self.sigma, self.kappa, self.theta, self.xi, self.rho
+        x = np.array([self.sigma, self.kappa, self.theta, self.xi, self.rho])
         sol = minimize(obj, x, method='SLSOP')
         print(sol.x)
     
-    def simulate_2d(self, n=1000, output='num'):
-        
+    def simulate(self, n=1000, output='num'):
+
+        """
+            n: the number of randoms
+                1000 in default
+            output: the final value ('num') or the entire simulation ('path')
+                'num' in default
+        """
+
         dt = self.t / n
-        z1, z2 = 
-        vols = self.simulate_1d(z1, 1000, 'path', 'sigma', self.xi)
-        
-        if type == 'num':
+        z1, z2 = np.random.multivariate_normal([0, 0], [[1, self.rho], [self.rho, 1]], n).T
+
+        if output == 'num':
             x = self.s
+            nu = self.sigma
             for i in range(n):
-                x += self.r * x * dt + x * np.sqrt(vols[i] * dt) * z2[i]
+                x += self.r * x * dt + x * np.sqrt(max(nu, 0) * dt) * z1[i]
+                nu += self.kappa * (self.theta - nu) * dt + np.sqrt(max(nu, 0) * dt) * self.xi * z2[i]
             return x
         else:
-            record = np.zeros(n+1)
+            record = np.zeros(n + 1)
             record[0] = self.s
-            for i in range(1, n+1):
-                record[i] += self.r * record[i-1] * dt + record[i-1] * np.sqrt(vols[i-1] * dt) * z2[i]
+            nu = self.sigma
+            for i in range(n):
+                record[i+1] = record[i] + self.r * record[i] * dt + record[i] * np.sqrt(max(nu, 0) * dt) * z2[i]
+                nu += self.kappa * (self.theta - nu) * dt + np.sqrt(max(nu, 0) * dt) * self.xi * z2[i]
             return record
 
 
-class sabr(cev):
+class SABR(CEV):
 
-    def __init__(self):
+    def __init__(self, sigma, alpha, beta, rho, s, r, t, q):
 
-        cev.__init__(self, s, r, sigma, t, beta, k, q)
+        CEV.__init__(self, s, r, sigma, t, beta, q)
         self.alpha = alpha
         self.rho = rho
 
-    def calibration(self, n, sigma_m, s_m, k_m, t, method='equal_weight'):
+    def calibrate(self, n, sigma_m, s_m, k_m, t, method='equal_weight'):
 
         """
             calibrate for every expiry
@@ -368,7 +363,7 @@ class sabr(cev):
             Note that self.sigma is the initial volatility (how to determine)
         """
 
-        def obj(x):
+        def obj():
 
             # self.alpha, self.beta, self.rho = x
             sse = 0
@@ -378,25 +373,58 @@ class sabr(cev):
                 q = np.log(s_m[i] / k_m[i])
                 z = self.alpha * p * q / self.sigma
 
-                x = np.log((np.sqrt(1 - 2 * self.rho * z + z * z) + z - self.rho) / (1 - self.rho))
+                f = np.log((np.sqrt(1 - 2 * self.rho * z + z * z) + z - self.rho) / (1 - self.rho))
                 a = 1 + ((1 - self.beta) ** 2 * self.sigma ** 2 / (
                             24 * p ** 2) + self.rho * self.alpha * self.beta * self.sigma
                          / (4 * p) + self.alpha ** 2 * (2 - 3 * self.rho ** 2) / 24) * t
                 b = 1 + (1 - self.beta) ** 2 * q ** 2 / 24 + (1 - self.beta) ** 4 * q ** 4 / 1920
 
-                vol = self.alpha * q / x * a / b
+                vol = self.alpha * q / f * a / b
 
                 sse += (vol - sigma_m[i]) ** 2
 
             return sse
 
-        x = self.alpha, self.beta, self.rho, self.sigma
+        x = np.array([self.alpha, self.beta, self.rho, self.sigma])
 
         sol = minimize(obj, x, method='SLSQP')
 
         print(sol.x)
 
-        
+    def simulate(self, n=1000, output='num'):
+
+        """
+            n: the number of randoms
+                1000 in default
+            output: the final value ('num') or the entire simulation ('path')
+                'num' in default
+
+            ds = r * s * dt + sigma * s ** beta * dW_1
+            d(sigma) = alpha * sigma * dW_2
+            Cov(dW_1, dW_2) = rho * dt
+        """
+
+        dt = self.t / n
+        z1, z2 = np.random.multivariate_normal([0, 0], [[1, self.rho], [self.rho, 1]], n).T
+
+        if output == 'num':
+            s = self.s
+            sigma = self.sigma
+            for i in range(n):
+                s += self.r * s * dt + sigma * z1[i] * s ** self.beta
+                sigma += self.alpha * sigma * z2[i]
+            return s
+        else:
+            record = np.zeros(n + 1)
+            record[0] = self.s
+            sigma = self.sigma
+            for i in range(n):
+                record[i+1] = record[i] + self.r * record[i] * dt + sigma * z1[i] * record[i] ** self.beta
+                sigma += self.alpha * sigma * z2[i]
+            return record
+
+
+"""
 sigma = 2.3467724
 nu0 = 0.05211403
 kappa = 3.1926385
@@ -407,9 +435,17 @@ t = 1
 r = 0.015-0.0177
 k1 = 285
 k2 = 315
-
+# sigma, kappa, theta, xi, rho, s, r, t, alpha=2, q=0.0
 # (0.12540801386207912-0.30499349480606175j)
-h = heston(s, r, nu0, t, kappa, theta, sigma, rho, k1)
-payoff, strikes = h.fourier()
+h = Heston(nu0, kappa, theta, sigma, rho, s, r, t)
+payoff, strikes = h.fft()
 print(payoff[len(payoff) // 2])
+
+su = 0
+for i in range(25000):
+    su += max(h.simulate_2d() - 282, 0) * np.exp(-0.015)
+print(su / 25000)
+"""
+
+
 
