@@ -60,7 +60,7 @@ class OrnsteinUhlenbeck(Stochastic):
         """
 
         dt = self.t / n
-        z = np.random.normal(n)
+        z = np.random.normal(size=n)
 
         if output == 'num':
             r = self.r
@@ -100,7 +100,7 @@ class CoxIntergellRoss(Stochastic):
         """
 
         dt = self.t / n
-        z = np.random.normal(n)
+        z = np.random.normal(size=n)
 
         if output == 'num':
             r = self.r
@@ -145,7 +145,7 @@ class CEV(Stochastic):
         """
 
         dt = self.t / n
-        z = np.random.normal(n)
+        z = np.random.normal(size=n)
 
         if output == 'num':
             s = self.s
