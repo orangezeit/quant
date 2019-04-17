@@ -9,16 +9,6 @@ class Stochastic:
     def __init__(self, s, r, sigma, t, q=0.0):
 
         """
-            The general stochastic process can be written as
-
-                dx = mu(x, t) * dt + v(x, t) * dW
-
-            where
-            
-                x is the object of the process
-                mu(x, t) is the drift
-                v(x, t) is the volatility
-
             s: the (initial) price of underlying assets
             r: the (initial) risk-free interest rate
             sigma: the volatility
@@ -31,11 +21,23 @@ class Stochastic:
         self.sigma = sigma
         self.t = t
     
-    def _generate(self, x0, drift, vol, dt, z):
+    def _generate(self, drift, vol, dt, z):
         
-        """ simulation generator """
+        """
+            simulation generator
+            
+            The general stochastic process can be written as
+
+                dx = mu(x, t) * dt + v(x, t) * dW
+
+            where
+            
+                x is the object of the process
+                mu(x, t) is the drift
+                v(x, t) is the volatility
+        """
         
-        return x0 + drift * dt + vol * np.sqrt(dt) * z
+        return drift * dt + vol * np.sqrt(dt) * z
 
 
 class OrnsteinUhlenbeck(Stochastic):
@@ -71,13 +73,13 @@ class OrnsteinUhlenbeck(Stochastic):
         if output == 'num':
             r = self.r
             for i in range(n):
-                r = self._generate(r, self.kappa * (self.theta - r), self.sigma, dt, z[i])
+                r += self._generate(self.kappa * (self.theta - r), self.sigma, dt, z[i])
             return r
         else:
             record = np.zeros(n+1)
             record[0] = self.r
             for i in range(n):
-                record[i+1] = self._generate(record[i], self.kappa * (self.theta - record[i]), self.sigma, dt, z[i])
+                record[i+1] = record[i] + self._generate(self.kappa * (self.theta - record[i]), self.sigma, dt, z[i])
             return record
 
 
@@ -111,14 +113,14 @@ class CoxIntergellRoss(Stochastic):
         if output == 'num':
             r = self.r
             for i in range(n):
-                r = self._generate(r, self.kappa * (self.theta - r), self.sigma * np.sqrt(max(r, 0)), dt, z[i])
+                r += self._generate(self.kappa * (self.theta - r), self.sigma * np.sqrt(max(r, 0)), dt, z[i])
             return r
         else:
             record = np.zeros(n+1)
             record[0] = self.r
             for i in range(n):
-                record[i+1] = record[i] + self.kappa * (self.theta - record[i]) * dt \
-                              + self.sigma * np.sqrt(max(record[i], 0) * dt) * z[i]
+                record[i+1] = record[i] + self._generate(self.kappa * (self.theta - record[i]), 
+                                                         self.sigma * np.sqrt(max(record[i], 0)), dt, z[i])
             return record
 
 
@@ -152,7 +154,7 @@ class CEV(Stochastic):
         if output == 'num':
             s = self.s
             for i in range(n):
-                s = self._generate(s, self.r * s, self.sigma * s ** self.beta, dt, z[i])
+                s += self._generate(self.r * s, self.sigma * s ** self.beta, dt, z[i])
             return s
         else:
             record = np.zeros(n+1)
