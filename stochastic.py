@@ -30,12 +30,18 @@ class Stochastic:
         self.r = r-q
         self.sigma = sigma
         self.t = t
+    
+    def _generate(self, x0, drift, vol, dt, z):
+        
+        """ simulation generator """
+        
+        return x0 + drift * dt + vol * np.sqrt(dt) * z
 
 
 class OrnsteinUhlenbeck(Stochastic):
 
     """
-        also known as Vasicek process
+        interest rate model, also known as Vasicek process
         mainly used as the interest rate model
     """
 
@@ -65,19 +71,19 @@ class OrnsteinUhlenbeck(Stochastic):
         if output == 'num':
             r = self.r
             for i in range(n):
-                r += self.kappa * (self.theta - r) * dt + self.sigma * np.sqrt(dt) * z[i]
+                r = self._generate(r, self.kappa * (self.theta - r), self.sigma, dt, z[i])
             return r
         else:
             record = np.zeros(n+1)
             record[0] = self.r
             for i in range(n):
-                record[i+1] = record[i] + self.kappa * (self.theta - record[i]) * dt + self.sigma * np.sqrt(dt) * z[i]
+                record[i+1] = self._generate(record[i], self.kappa * (self.theta - record[i]), self.sigma, dt, z[i])
             return record
 
 
 class CoxIntergellRoss(Stochastic):
 
-    """ mainly used as the interest rate model """
+    """ interest rate model """
 
     def __init__(self, r, sigma, t, kappa, theta, s=0.0, q=0.0):
 
@@ -104,15 +110,12 @@ class CoxIntergellRoss(Stochastic):
 
         if output == 'num':
             r = self.r
-
             for i in range(n):
-                r += self.kappa * (self.theta - r) * dt + self.sigma * np.sqrt(max(r, 0) * dt) * z[i]
-
+                r = self._generate(r, self.kappa * (self.theta - r), self.sigma * np.sqrt(max(r, 0)), dt, z[i])
             return r
         else:
             record = np.zeros(n+1)
             record[0] = self.r
-
             for i in range(n):
                 record[i+1] = record[i] + self.kappa * (self.theta - record[i]) * dt \
                               + self.sigma * np.sqrt(max(record[i], 0) * dt) * z[i]
@@ -127,9 +130,8 @@ class CEV(Stochastic):
 
         """
             beta: skewness of volatility surface
-                if beta = 0, 
-                if beta = 1, Black-Scholes model
-            k: the strike
+                if beta = 0, Bachelier
+                if beta = 1, Black-Scholes
         """
         
         Stochastic.__init__(self, s, r, sigma, t, q)
@@ -150,12 +152,13 @@ class CEV(Stochastic):
         if output == 'num':
             s = self.s
             for i in range(n):
-                s += self.r * s * dt + self.sigma * np.sqrt(dt) * z[i] * s ** self.beta
+                s = self._generate(s, self.r * s, self.sigma * s ** self.beta, dt, z[i])
             return s
         else:
             record = np.zeros(n+1)
             record[0] = self.s
             for i in range(n):
+                record[i+1] = self._generate(record[i], 
                 record[i+1] = record[i] + self.r * record[i] * dt \
                               + self.sigma * np.sqrt(dt) * z[i] * record[i] ** self.beta
             return record
