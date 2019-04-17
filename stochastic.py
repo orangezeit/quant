@@ -5,7 +5,9 @@ from scipy.optimize import minimize
 
 
 class Stochastic:
-
+    
+    """ stochastic process """
+    
     def __init__(self, s, r, sigma, t, q=0.0):
 
         """
@@ -21,11 +23,14 @@ class Stochastic:
         self.sigma = sigma
         self.t = t
     
-    def _generate(self, drift, vol, dt, z):
+    def _generate(self, mu, v, dt, z, grid='Euler'):
         
         """
-            simulation generator
-            
+            generate simulation
+            mu: the drift
+            v: the volatility
+            dt: time mash
+            z: random generated from (possibly correlated) standard normal distribution
             The general stochastic process can be written as
 
                 dx = mu(x, t) * dt + v(x, t) * dW
@@ -36,8 +41,15 @@ class Stochastic:
                 mu(x, t) is the drift
                 v(x, t) is the volatility
         """
+
+        return mu * dt + vol * np.sqrt(dt) * z
+    
+    def _modify(self, vol, method='cutoff'):
         
-        return drift * dt + vol * np.sqrt(dt) * z
+        """ modify volatility if negative during simulation """
+        
+        if method == 'cutoff':
+            return np.sqrt(max(vol, 0))
 
 
 class OrnsteinUhlenbeck(Stochastic):
@@ -113,14 +125,14 @@ class CoxIntergellRoss(Stochastic):
         if output == 'num':
             r = self.r
             for i in range(n):
-                r += self._generate(self.kappa * (self.theta - r), self.sigma * np.sqrt(max(r, 0)), dt, z[i])
+                r += self._generate(self.kappa * (self.theta - r), self.sigma * self._modify(r), dt, z[i])
             return r
         else:
             record = np.zeros(n+1)
             record[0] = self.r
             for i in range(n):
                 record[i+1] = record[i] + self._generate(self.kappa * (self.theta - record[i]), 
-                                                         self.sigma * np.sqrt(max(record[i], 0)), dt, z[i])
+                                                         self.sigma * self._modify(record[i]), dt, z[i])
             return record
 
 
@@ -160,9 +172,8 @@ class CEV(Stochastic):
             record = np.zeros(n+1)
             record[0] = self.s
             for i in range(n):
-                record[i+1] = self._generate(record[i], 
-                record[i+1] = record[i] + self.r * record[i] * dt \
-                              + self.sigma * np.sqrt(dt) * z[i] * record[i] ** self.beta
+                record[i+1] = record[i] + self._generate(self.r * record[i], 
+                                                         self.sigma * record[i] ** self.beta, dt, z[i])
             return record
 
 
@@ -196,7 +207,7 @@ class Heston(CoxIntergellRoss):
     def __init__(self, sigma, kappa, theta, xi, rho, s, r, t, alpha=2, q=0.0):
 
         """
-            xi(sigma): the skewness
+            xi: the skewness
             rho: the correlation between two motions
             alpha: the damping factor
         """
@@ -316,7 +327,7 @@ class Heston(CoxIntergellRoss):
         sol = minimize(obj, x, method='SLSOP')
         print(sol.x)
     
-    def simulate(self, n=1000, output='num'):
+    def simulate(self, n=1000, output='num', grid='Euler', method='cutoff'):
 
         """
             n: the number of randoms
@@ -327,21 +338,20 @@ class Heston(CoxIntergellRoss):
 
         dt = self.t / n
         z1, z2 = np.random.multivariate_normal([0, 0], [[1, self.rho], [self.rho, 1]], n).T
-
+        sigma = self.sigma
+        
         if output == 'num':
-            x = self.s
-            nu = self.sigma
+            s = self.s
             for i in range(n):
-                x += self.r * x * dt + x * np.sqrt(max(nu, 0) * dt) * z1[i]
-                nu += self.kappa * (self.theta - nu) * dt + np.sqrt(max(nu, 0) * dt) * self.xi * z2[i]
+                s += self._generate(self.r * s, s * self._modify(sigma), dt, z1[i])
+                sigma += self._generate(self.kappa * (self.theta - sigma), self._modify(sigma) * self.xi, dt, z2[i])
             return x
         else:
             record = np.zeros(n + 1)
             record[0] = self.s
-            nu = self.sigma
             for i in range(n):
-                record[i+1] = record[i] + self.r * record[i] * dt + record[i] * np.sqrt(max(nu, 0) * dt) * z2[i]
-                nu += self.kappa * (self.theta - nu) * dt + np.sqrt(max(nu, 0) * dt) * self.xi * z2[i]
+                record[i+1] = record[i] + self._generate(self.r * record[i], record[i] * self._modify(sigma), dt, z1[i])
+                sigma += self._generate(self.kappa * (self.theta - sigma), self._modify(sigma) * self.xi, dt, z2[i])
             return record
 
 
@@ -360,7 +370,7 @@ class SABR(CEV):
             sigma_m: the market volatility
             k_m: the market strike
 
-            Note that self.sigma is the initial volatility (how to determine)
+            Note that self.sigma is the initial volatility
         """
 
         def obj():
@@ -406,21 +416,20 @@ class SABR(CEV):
 
         dt = self.t / n
         z1, z2 = np.random.multivariate_normal([0, 0], [[1, self.rho], [self.rho, 1]], n).T
-
+        sigma = self.sigma
+        
         if output == 'num':
             s = self.s
-            sigma = self.sigma
             for i in range(n):
-                s += self.r * s * dt + sigma * z1[i] * s ** self.beta
-                sigma += self.alpha * sigma * z2[i]
+                s += self._generate(self.r * s, sigma * s ** self.beta, dt, z1[i])
+                sigma += self._generate(0, self.alpha * sigma, dt, z2[i])
             return s
         else:
             record = np.zeros(n + 1)
             record[0] = self.s
-            sigma = self.sigma
             for i in range(n):
-                record[i+1] = record[i] + self.r * record[i] * dt + sigma * z1[i] * record[i] ** self.beta
-                sigma += self.alpha * sigma * z2[i]
+                record[i+1] = record[i] + self._generate(self.r * record[i], sigma * record[i] ** self.beta, dt, z1[i])
+                sigma += self._generate(0, self.alpha * sigma, dt, z2[i])
             return record
 
 
