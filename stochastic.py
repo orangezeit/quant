@@ -1,5 +1,4 @@
 import numpy as np
-import pandas as pd
 from scipy.stats import norm
 from scipy.optimize import minimize
 
@@ -22,34 +21,58 @@ class Stochastic:
         self.r = r-q
         self.sigma = sigma
         self.t = t
-    
-    def _generate(self, mu, v, dt, z, grid='Euler'):
-        
-        """
-            generate simulation
-            mu: the drift
-            v: the volatility
-            dt: time mash
-            z: random generated from (possibly correlated) standard normal distribution
-            The general stochastic process can be written as
 
-                dx = mu(x, t) * dt + v(x, t) * dW
 
-            where
-            
-                x is the object of the process
-                mu(x, t) is the drift
-                v(x, t) is the volatility
-        """
+def _generate(mu, v, dt, z, grid='Euler', dv=0.0):
+        
+    """
+        generate simulation
 
-        return mu * dt + vol * np.sqrt(dt) * z
-    
-    def _modify(self, vol, method='cutoff'):
-        
-        """ modify volatility if negative during simulation """
-        
-        if method == 'cutoff':
-            return np.sqrt(max(vol, 0))
+
+        mu: the drift
+        v: the volatility
+        dt: time mash
+        z: random generated from (possibly correlated) standard normal distribution
+
+        The general stochastic process can be written as
+
+            dx = mu(x, t) * dt + v(x, t) * dW
+
+        where
+
+            x is the object of the process
+            mu(x, t) is the drift
+            v(x, t) is the volatility
+
+        grid: 'Euler' in default
+
+            delta_x = mu(x, t) * delta_t + v(x, t) * sqrt(delta_t) * z
+
+
+    """
+
+    if grid == 'Euler':
+        return mu * dt + v * np.sqrt(dt) * z
+    elif grid == 'Milstein':
+        return mu * dt + v * np.sqrt(dt) * z + v * dv * dt * (z * z - 1) / 2
+
+
+def _modify(vol, method='truncate'):
+
+    """
+        modify volatility if negative during simulation
+        method: adjust volatility
+            truncate: assume vol=0
+            reflect: assume vol=-vol
+    """
+
+    if vol >= 0:
+        return np.sqrt(vol)
+
+    if method == 'truncate':
+        return 0
+    elif method == 'reflect':
+        return np.sqrt(-vol)
 
 
 class OrnsteinUhlenbeck(Stochastic):
@@ -252,7 +275,7 @@ class Heston(CoxIntergellRoss):
 
         return payoffs * y.real, np.exp(k)
     
-    def payoff(self, combo, k):
+    def payoff(self, k, combo=tuple()):
         
         """ 
             Given the payoffs and strikes (combo) from FFT, find the model price for the strike k
@@ -261,14 +284,15 @@ class Heston(CoxIntergellRoss):
                 Linearly interpolate in the corresponding payoffs range and output the price
         """
         
-        payoffs, strikes = combo
+        payoffs, strikes = combo if combo else self.fft()
         
         left = 0
         right = len(strikes)-1
-        
+
         while right - left > 1:
             
-            mid = (right - left) // 2
+            mid = (left + right) // 2
+
             if strikes[mid] <= k:
                 left = mid
             else:
@@ -278,7 +302,7 @@ class Heston(CoxIntergellRoss):
         
         return payoffs[left] + slope * (k - strikes[left])
         
-    def calibrate(self, n, sm, tm, km, cm):
+    def calibrate(self, n, tm, km, cm):
 
         """
             calibration principle: only generate fft once for each pair of (s, t)
@@ -305,9 +329,9 @@ class Heston(CoxIntergellRoss):
         d = {}
         
         for i in range(n):
-            d.setdefault((sm[i], tm[i]), set()).add((km[i], cm[i]))
+            d.setdefault(tm[i], set()).add((km[i], cm[i]))
 
-        def obj():
+        def obj(x):
 
             """ x = [ sigma, kappa, theta, xi, rho ] """
 
@@ -315,17 +339,24 @@ class Heston(CoxIntergellRoss):
             sse = 0
 
             for key, value in d.items():
-                self.s, self.t = key
+
+                self.t = key
                 combo = self.fft()
-                
+
                 for k, c in value:
-                    sse += (c - self.payoff(combo, k)) ** 2
+                    sse += (c - self.payoff(k, combo)) ** 2
 
             return sse
-        
+
+        b = ((0, 1), (0.01, 5), (0.01, 2), (0, 2), (-1, 1))
+
         x = np.array([self.sigma, self.kappa, self.theta, self.xi, self.rho])
-        sol = minimize(obj, x, method='SLSOP')
+        print(obj(x))
+        # [ 0.05225563  5.          0.05879346  2.         -0.79795411]
+        print(obj([0.05225563,  5.,         0.05879346,  2.,       -0.79795411]))
+        sol = minimize(obj, x, method='SLSQP', bounds=b)
         print(sol.x)
+        print(obj(sol.x))
     
     def simulate(self, n=1000, output='num', grid='Euler', method='cutoff'):
 
@@ -345,12 +376,13 @@ class Heston(CoxIntergellRoss):
             for i in range(n):
                 s += self._generate(self.r * s, s * self._modify(sigma), dt, z1[i])
                 sigma += self._generate(self.kappa * (self.theta - sigma), self._modify(sigma) * self.xi, dt, z2[i])
-            return x
+            return s
         else:
             record = np.zeros(n + 1)
             record[0] = self.s
             for i in range(n):
-                record[i+1] = record[i] + self._generate(self.r * record[i], record[i] * self._modify(sigma), dt, z1[i])
+                record[i+1] = record[i] + self._generate(self.r * record[i],
+                                                         record[i] * self._modify(sigma), dt, z1[i])
                 sigma += self._generate(self.kappa * (self.theta - sigma), self._modify(sigma) * self.xi, dt, z2[i])
             return record
 
@@ -358,6 +390,11 @@ class Heston(CoxIntergellRoss):
 class SABR(CEV):
 
     def __init__(self, sigma, alpha, beta, rho, s, r, t, q):
+
+        """
+            alpha: growth rate of the volatility
+            rho: correlations between two Brownian motions
+        """
 
         CEV.__init__(self, s, r, sigma, t, beta, q)
         self.alpha = alpha
@@ -428,33 +465,7 @@ class SABR(CEV):
             record = np.zeros(n + 1)
             record[0] = self.s
             for i in range(n):
-                record[i+1] = record[i] + self._generate(self.r * record[i], sigma * record[i] ** self.beta, dt, z1[i])
+                record[i+1] = record[i] + self._generate(self.r * record[i],
+                                                         sigma * record[i] ** self.beta, dt, z1[i])
                 sigma += self._generate(0, self.alpha * sigma, dt, z2[i])
             return record
-
-
-"""
-sigma = 2.3467724
-nu0 = 0.05211403
-kappa = 3.1926385
-rho = -0.72705056
-theta = 0.08327063
-s = 282
-t = 1
-r = 0.015-0.0177
-k1 = 285
-k2 = 315
-# sigma, kappa, theta, xi, rho, s, r, t, alpha=2, q=0.0
-# (0.12540801386207912-0.30499349480606175j)
-h = Heston(nu0, kappa, theta, sigma, rho, s, r, t)
-payoff, strikes = h.fft()
-print(payoff[len(payoff) // 2])
-
-su = 0
-for i in range(25000):
-    su += max(h.simulate_2d() - 282, 0) * np.exp(-0.015)
-print(su / 25000)
-"""
-
-
-
