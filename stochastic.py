@@ -1,33 +1,15 @@
+# Creator: Yunfei Luo
+# Date: Apr 19, 2019  1:07 PM
+
 import numpy as np
 from scipy.stats import norm
 from scipy.optimize import minimize
 
 
-class Stochastic:
-    
-    """ stochastic process """
-    
-    def __init__(self, s, r, sigma, t, q=0.0):
+def _generate(mu, v, dt, z, method='Euler', dv=0.0):
 
-        """
-            s: the (initial) price of underlying assets
-            r: the (initial) risk-free interest rate
-            sigma: the volatility
-            t: the expiry
-            q: the dividend
-        """
-
-        self.s = s
-        self.r = r-q
-        self.sigma = sigma
-        self.t = t
-
-
-def _generate(mu, v, dt, z, grid='Euler', dv=0.0):
-        
     """
-        generate simulation
-
+        simulation generator
 
         mu: the drift
         v: the volatility
@@ -44,35 +26,57 @@ def _generate(mu, v, dt, z, grid='Euler', dv=0.0):
             mu(x, t) is the drift
             v(x, t) is the volatility
 
-        grid: 'Euler' in default
+        method: the simulation method, 'Euler' in default
 
-            delta_x = mu(x, t) * delta_t + v(x, t) * sqrt(delta_t) * z
-
-
+            Euler method: delta_x = mu(x, t) * delta_t + v(x, t) * sqrt(delta_t) * z
+            Milstein method: delta_x = mu(x, t) * delta_t + v(x, t) * sqrt(delta_t) * z
+                                                          + 1 / 2 * v(x, t) * delta_v(x, t) * (z ** 2 - 1) * delta_t
     """
 
-    if grid == 'Euler':
+    if method == 'Euler':
         return mu * dt + v * np.sqrt(dt) * z
-    elif grid == 'Milstein':
+    elif method == 'Milstein':
         return mu * dt + v * np.sqrt(dt) * z + v * dv * dt * (z * z - 1) / 2
 
 
-def _modify(vol, method='truncate'):
+def _modify(v, method='truncate'):
 
     """
         modify volatility if negative during simulation
-        method: adjust volatility
+
+        vol: the volatility
+        method: adjust volatility, 'truncate' in default
             truncate: assume vol=0
             reflect: assume vol=-vol
     """
 
-    if vol >= 0:
-        return np.sqrt(vol)
+    if v >= 0:
+        return np.sqrt(v)
 
     if method == 'truncate':
         return 0
     elif method == 'reflect':
-        return np.sqrt(-vol)
+        return np.sqrt(-v)
+
+
+class Stochastic:
+    
+    """ stochastic process """
+    
+    def __init__(self, s, r, sigma, t, q=0.0):
+
+        """
+            s: the (initial) price of underlying assets
+            r: the (initial) interest rate / rate of return
+            sigma: the volatility
+            t: the expiry
+            q: the dividend
+        """
+
+        self.s = s
+        self.r = r-q
+        self.sigma = sigma
+        self.t = t
 
 
 class OrnsteinUhlenbeck(Stochastic):
@@ -96,10 +100,8 @@ class OrnsteinUhlenbeck(Stochastic):
     def simulate(self, n=1000, output='num'):
 
         """
-            n: the number of randoms
-                1000 in default
-            output: the final value ('num') or the entire simulation ('path')
-                'num' in default
+            n: the number of randoms, 1000 in default
+            output: the final value ('num') or the entire simulation ('path'), 'num' in default
         """
 
         dt = self.t / n
@@ -108,13 +110,13 @@ class OrnsteinUhlenbeck(Stochastic):
         if output == 'num':
             r = self.r
             for i in range(n):
-                r += self._generate(self.kappa * (self.theta - r), self.sigma, dt, z[i])
+                r += _generate(self.kappa * (self.theta - r), self.sigma, dt, z[i])
             return r
         else:
             record = np.zeros(n+1)
             record[0] = self.r
             for i in range(n):
-                record[i+1] = record[i] + self._generate(self.kappa * (self.theta - record[i]), self.sigma, dt, z[i])
+                record[i+1] = record[i] + _generate(self.kappa * (self.theta - record[i]), self.sigma, dt, z[i])
             return record
 
 
@@ -136,10 +138,8 @@ class CoxIntergellRoss(Stochastic):
     def simulate(self, n=1000, output='num'):
 
         """
-            n: the number of randoms
-                1000 in default
-            output: the final value ('num') or the entire simulation ('path')
-                'num' in default
+            n: the number of randoms, 1000 in default
+            output: the final value ('num') or the entire simulation ('path'), 'num' in default
         """
 
         dt = self.t / n
@@ -148,14 +148,14 @@ class CoxIntergellRoss(Stochastic):
         if output == 'num':
             r = self.r
             for i in range(n):
-                r += self._generate(self.kappa * (self.theta - r), self.sigma * self._modify(r), dt, z[i])
+                r += _generate(self.kappa * (self.theta - r), self.sigma * _modify(r), dt, z[i])
             return r
         else:
             record = np.zeros(n+1)
             record[0] = self.r
             for i in range(n):
-                record[i+1] = record[i] + self._generate(self.kappa * (self.theta - record[i]), 
-                                                         self.sigma * self._modify(record[i]), dt, z[i])
+                record[i+1] = record[i] + _generate(self.kappa * (self.theta - record[i]),
+                                                    self.sigma * _modify(record[i]), dt, z[i])
             return record
 
 
@@ -167,8 +167,7 @@ class CEV(Stochastic):
 
         """
             beta: skewness of volatility surface
-                if beta = 0, Bachelier
-                if beta = 1, Black-Scholes
+                beta >= 0
         """
         
         Stochastic.__init__(self, s, r, sigma, t, q)
@@ -177,10 +176,8 @@ class CEV(Stochastic):
     def simulate(self, n=1000, output='num'):
 
         """
-            n: the number of randoms
-                1000 in default
-            output: the final value ('num') or the entire simulation ('path')
-                'num' in default
+            n: the number of randoms, 1000 in default
+            output: the final value ('num') or the entire simulation ('path'), 'num' in default
         """
 
         dt = self.t / n
@@ -189,40 +186,67 @@ class CEV(Stochastic):
         if output == 'num':
             s = self.s
             for i in range(n):
-                s += self._generate(self.r * s, self.sigma * s ** self.beta, dt, z[i])
+                s += _generate(self.r * s, self.sigma * s ** self.beta, dt, z[i])
             return s
         else:
             record = np.zeros(n+1)
             record[0] = self.s
             for i in range(n):
-                record[i+1] = record[i] + self._generate(self.r * record[i], 
-                                                         self.sigma * record[i] ** self.beta, dt, z[i])
+                record[i+1] = record[i] + _generate(self.r * record[i], self.sigma * record[i] ** self.beta, dt, z[i])
             return record
-
-
-class BlackScholes(CEV):
-
-    def __init__(self, s, r, sigma, t, q=0.0):
-        CEV.__init__(self, s, r, sigma, t, 1, q)
-
-    def euro_option(self, k, option='call', output='value'):
-
-        """ d1 and d2 are constants for closed-form solution """
-
-        d1 = (np.log(self.s / k) + (self.r + self.sigma ** 2 / 2) * self.t) / (self.sigma * np.sqrt(self.t))
-        d2 = d1 - self.sigma * np.sqrt(self.t)
-
-        if option == 'call':
-            if output == 'value':
-                return norm.cdf(d1) * self.s - norm.cdf(d2) * k * np.exp(-self.r * self.t)
-        else:  # put
-            return 1
 
 
 class Bachelier(CEV):
 
     def __init__(self, s, r, sigma, t, q=0.0):
+
+        """ Bachelier is CEV with beta = 0 """
+
         CEV.__init__(self, s, r, sigma, t, 0, q)
+
+
+class BlackScholes(CEV):
+
+    def __init__(self, s, r, sigma, t, q=0.0):
+
+        CEV.__init__(self, s, r, sigma, t, 1, q)
+
+    def _d1(self, k):
+
+        """ constant required for the close form solutions with strike k """
+
+        return (np.log(self.s / k) + (self.r + self.sigma ** 2 / 2) * self.t) / (self.sigma * np.sqrt(self.t))
+
+    def _d2(self, k):
+
+        """ constant required for the close form solutions with strike k """
+
+        return self._d1(k) - self.sigma * np.sqrt(self.t)
+
+    def euro_value(self, k, option='call'):
+
+        """
+            closed-form solutions for price of European options
+
+            k: the strike
+            option: 'call' or 'put'
+        """
+
+        if option == 'call':
+            return norm.cdf(self._d1(k)) * self.s - norm.cdf(self._d2(k)) * np.exp(-self.r * self.t)
+        elif option == 'put':
+            return 1
+
+    def euro_delta(self, k, output='value'):
+
+        """
+            closed-form solutions for deltas of European options
+
+            k: the strike
+            option: 'call' or 'put'
+        """
+
+        pass
 
 
 class Heston(CoxIntergellRoss):
@@ -230,6 +254,9 @@ class Heston(CoxIntergellRoss):
     def __init__(self, sigma, kappa, theta, xi, rho, s, r, t, alpha=2, q=0.0):
 
         """
+            the price is log-normal
+            the volatility follows Cox-Intergell-Ross process
+
             xi: the skewness
             rho: the correlation between two motions
             alpha: the damping factor
@@ -305,7 +332,7 @@ class Heston(CoxIntergellRoss):
     def calibrate(self, n, tm, km, cm):
 
         """
-            calibration principle: only generate fft once for each pair of (s, t)
+            calibration principle: only generate fft once for each pair of (s, t), calibrate for all expiries
             
             Step One: Data Reconstruction - from {(s,t,k,c)} to {(s,t): {(k,c)}}
             
@@ -354,17 +381,19 @@ class Heston(CoxIntergellRoss):
         print(obj(x))
         # [ 0.05225563  5.          0.05879346  2.         -0.79795411]
         print(obj([0.05225563,  5.,         0.05879346,  2.,       -0.79795411]))
-        sol = minimize(obj, x, method='SLSQP', bounds=b)
+        sol = minimize(obj, x, method='L-BFGS-B', bounds=b)
         print(sol.x)
         print(obj(sol.x))
     
     def simulate(self, n=1000, output='num', grid='Euler', method='cutoff'):
 
         """
-            n: the number of randoms
-                1000 in default
-            output: the final value ('num') or the entire simulation ('path')
-                'num' in default
+            n: the number of randoms, 1000 in default
+            output: the final value ('num') or the entire simulation ('path'), 'num' in default
+
+                         ds = [r * s] * dt + [sqrt(sigma) * s] * dW_1
+                   d(sigma) = [kappa * (theta - sigma)] * dt + [xi * sqrt(sigma)] * dW_2
+            Cov(dW_1, dW_2) = rho * dt
         """
 
         dt = self.t / n
@@ -374,16 +403,15 @@ class Heston(CoxIntergellRoss):
         if output == 'num':
             s = self.s
             for i in range(n):
-                s += self._generate(self.r * s, s * self._modify(sigma), dt, z1[i])
-                sigma += self._generate(self.kappa * (self.theta - sigma), self._modify(sigma) * self.xi, dt, z2[i])
+                s += _generate(self.r * s, _modify(sigma) * s, dt, z1[i])
+                sigma += _generate(self.kappa * (self.theta - sigma), self.xi * _modify(sigma), dt, z2[i])
             return s
         else:
             record = np.zeros(n + 1)
             record[0] = self.s
             for i in range(n):
-                record[i+1] = record[i] + self._generate(self.r * record[i],
-                                                         record[i] * self._modify(sigma), dt, z1[i])
-                sigma += self._generate(self.kappa * (self.theta - sigma), self._modify(sigma) * self.xi, dt, z2[i])
+                record[i+1] = record[i] + _generate(self.r * record[i], _modify(sigma) * record[i], dt, z1[i])
+                sigma += _generate(self.kappa * (self.theta - sigma), self.xi * _modify(sigma), dt, z2[i])
             return record
 
 
@@ -392,6 +420,9 @@ class SABR(CEV):
     def __init__(self, sigma, alpha, beta, rho, s, r, t, q):
 
         """
+            the price follows CEV
+            the volatility is log-normal
+
             alpha: growth rate of the volatility
             rho: correlations between two Brownian motions
         """
@@ -434,20 +465,18 @@ class SABR(CEV):
 
         x = np.array([self.alpha, self.beta, self.rho, self.sigma])
 
-        sol = minimize(obj, x, method='SLSQP')
+        sol = minimize(obj, x, method='L-BFGS-B')
 
         print(sol.x)
 
     def simulate(self, n=1000, output='num'):
 
         """
-            n: the number of randoms
-                1000 in default
-            output: the final value ('num') or the entire simulation ('path')
-                'num' in default
+            n: the number of randoms, 1000 in default
+            output: the final value ('num') or the entire simulation ('path'), 'num' in default
 
-            ds = r * s * dt + sigma * s ** beta * dW_1
-            d(sigma) = alpha * sigma * dW_2
+                         ds = [r * s] * dt + [sigma * s ** beta] * dW_1
+                   d(sigma) = [alpha * sigma] * dW_2
             Cov(dW_1, dW_2) = rho * dt
         """
 
@@ -458,14 +487,13 @@ class SABR(CEV):
         if output == 'num':
             s = self.s
             for i in range(n):
-                s += self._generate(self.r * s, sigma * s ** self.beta, dt, z1[i])
-                sigma += self._generate(0, self.alpha * sigma, dt, z2[i])
+                s += _generate(self.r * s, sigma * s ** self.beta, dt, z1[i])
+                sigma += _generate(0, self.alpha * sigma, dt, z2[i])
             return s
         else:
             record = np.zeros(n + 1)
             record[0] = self.s
             for i in range(n):
-                record[i+1] = record[i] + self._generate(self.r * record[i],
-                                                         sigma * record[i] ** self.beta, dt, z1[i])
-                sigma += self._generate(0, self.alpha * sigma, dt, z2[i])
+                record[i+1] = record[i] + _generate(self.r * record[i], sigma * record[i] ** self.beta, dt, z1[i])
+                sigma += _generate(0, self.alpha * sigma, dt, z2[i])
             return record
