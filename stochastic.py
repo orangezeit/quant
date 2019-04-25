@@ -195,6 +195,15 @@ class CEV(Stochastic):
                 record[i+1] = record[i] + _generate(self.r * record[i], self.sigma * record[i] ** self.beta, dt, z[i])
             return record
 
+    def pde(self, ht, hs, smax, k1, k2=0, option='Euro', method='Euler-Explicit'):
+
+        n = self.t // ht
+        m = smax // hs
+
+        c = np.zeros((m-1, 1))
+
+        # payoff
+
 
 class Bachelier(CEV):
 
@@ -251,7 +260,7 @@ class BlackScholes(CEV):
 
 class Heston(CoxIntergellRoss):
 
-    def __init__(self, sigma, kappa, theta, xi, rho, s, r, t, alpha=2, q=0.0):
+    def __init__(self, sigma, kappa, theta, xi, rho, s, r, t=1, alpha=2, q=0.0):
 
         """
             the price is log-normal
@@ -351,6 +360,7 @@ class Heston(CoxIntergellRoss):
             tm: the market expiry
             km: np.array / the market strikes
             cm: np.array / the market prices for options
+            b: bounds for parameters
         """
         
         d = {}
@@ -371,19 +381,19 @@ class Heston(CoxIntergellRoss):
                 combo = self.fft()
 
                 for k, c in value:
+
                     sse += (c - self.payoff(k, combo)) ** 2
 
             return sse
 
-        b = ((0, 1), (0.01, 5), (0.01, 2), (0, 2), (-1, 1))
-
-        x = np.array([self.sigma, self.kappa, self.theta, self.xi, self.rho])
+        x = [self.sigma, self.kappa, self.theta, self.xi, self.rho]
         print(obj(x))
-        # [ 0.05225563  5.          0.05879346  2.         -0.79795411]
-        print(obj([0.05225563,  5.,         0.05879346,  2.,       -0.79795411]))
-        sol = minimize(obj, x, method='L-BFGS-B', bounds=b)
+        bd = ((0.01, 10), (0.01, 10), (0.01, 10), (0.01, 10), (-1, 1))
+
+        sol = minimize(obj, x, method='SLSQP', bounds=bd)
         print(sol.x)
         print(obj(sol.x))
+        return sol.x
     
     def simulate(self, n=1000, output='num', grid='Euler', method='cutoff'):
 
@@ -417,7 +427,7 @@ class Heston(CoxIntergellRoss):
 
 class SABR(CEV):
 
-    def __init__(self, sigma, alpha, beta, rho, s, r, t, q):
+    def __init__(self, sigma, alpha, beta, rho, s, r, t=1, q=0.0):
 
         """
             the price follows CEV
@@ -431,43 +441,47 @@ class SABR(CEV):
         self.alpha = alpha
         self.rho = rho
 
-    def calibrate(self, n, sigma_m, s_m, k_m, t):
+    def calibrate(self, n, sigma_m, km):
 
         """
-            calibrate for every expiry
+            calibrate for every expiry (t is the same)
             sigma_m: the market volatility
-            k_m: the market strike
+            f: the forward initial value = s * e^{rt}
+            km: the market strike
 
             Note that self.sigma is the initial volatility
         """
 
-        def obj():
+        f = self.s * np.exp(self.r * self.t)
 
-            # self.alpha, self.beta, self.rho = x
+        def obj(x):
+
+            self.alpha, self.beta, self.rho, self.sigma = x
             sse = 0
 
             for i in range(n):
-                p = (s_m[i] * k_m[i]) ** ((1 - self.beta) / 2)
-                q = np.log(s_m[i] / k_m[i])
+
+                p = (f * km[i]) ** ((1 - self.beta) / 2)
+                q = np.log(f / km[i])
                 z = self.alpha * p * q / self.sigma
 
-                f = np.log((np.sqrt(1 - 2 * self.rho * z + z * z) + z - self.rho) / (1 - self.rho))
+                y = np.log((np.sqrt(1 - 2 * self.rho * z + z * z) + z - self.rho) / (1 - self.rho))
                 a = 1 + ((1 - self.beta) ** 2 * self.sigma ** 2 / (
                             24 * p ** 2) + self.rho * self.alpha * self.beta * self.sigma
-                         / (4 * p) + self.alpha ** 2 * (2 - 3 * self.rho ** 2) / 24) * t
+                         / (4 * p) + self.alpha ** 2 * (2 - 3 * self.rho ** 2) / 24) * self.t
                 b = 1 + (1 - self.beta) ** 2 * q ** 2 / 24 + (1 - self.beta) ** 4 * q ** 4 / 1920
 
-                vol = self.alpha * q / f * a / b
+                vol = self.alpha * q / y * a / b
 
                 sse += (vol - sigma_m[i]) ** 2
 
             return sse
 
         x = np.array([self.alpha, self.beta, self.rho, self.sigma])
+        bd = ((0, 10), (0.5, 0.5), (-1, 0), (0, 10))
+        sol = minimize(obj, x, method='L-BFGS-B', bounds=bd)
 
-        sol = minimize(obj, x, method='L-BFGS-B')
-
-        print(sol.x)
+        return sol.x
 
     def simulate(self, n=1000, output='num'):
 
