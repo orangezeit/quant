@@ -478,7 +478,7 @@ class SABR(CEV):
             return sse
 
         x = np.array([self.alpha, self.beta, self.rho, self.sigma])
-        bd = ((0, 10), (0.5, 0.5), (-1, 0), (0, 10))
+        bd = ((0, None), (0.8, 0.8), (-1, 1), (0, None))
         sol = minimize(obj, x, method='L-BFGS-B', bounds=bd)
 
         return sol.x
