@@ -1,5 +1,5 @@
 # Creator: Yunfei Luo
-# Date: Apr 19, 2019  10:07 PM
+# Date: Apr 29, 2019  10:07 PM
 
 import numpy as np
 from scipy.stats import norm
@@ -31,6 +31,8 @@ def _generate(mu, v, dt, z, method='Euler', dv=0.0):
             Euler method: delta_x = mu(x, t) * delta_t + v(x, t) * sqrt(delta_t) * z
             Milstein method: delta_x = mu(x, t) * delta_t + v(x, t) * sqrt(delta_t) * z
                                                           + 1 / 2 * v(x, t) * delta_v(x, t) * (z ** 2 - 1) * delta_t
+
+        dv: volatility mesh, required if Milstein method is chosen
     """
 
     if method == 'Euler':
@@ -46,22 +48,25 @@ def _modify(v, method='truncate'):
 
         vol: the volatility
         method: adjust volatility, 'truncate' in default
-            truncate: assume vol=0
-            reflect: assume vol=-vol
+
+            truncate: assume vol=0 if vol < 0
+                cause volatility to be less
+            reflect: assume vol=-vol if vol < 0
+                cause volatility to be more
     """
 
     if v >= 0:
-        return np.sqrt(v)
+        return v
 
     if method == 'truncate':
         return 0
     elif method == 'reflect':
-        return np.sqrt(-v)
+        return -v
 
 
 class Stochastic:
     
-    """ stochastic process """
+    """ general stochastic process """
     
     def __init__(self, s, r, sigma, t, q=0.0):
 
@@ -148,14 +153,14 @@ class CoxIntergellRoss(Stochastic):
         if output == 'num':
             r = self.r
             for i in range(n):
-                r += _generate(self.kappa * (self.theta - r), self.sigma * _modify(r), dt, z[i])
+                r += _generate(self.kappa * (self.theta - r), self.sigma * np.sqrt(_modify(r)), dt, z[i])
             return r
         else:
             record = np.zeros(n+1)
             record[0] = self.r
             for i in range(n):
                 record[i+1] = record[i] + _generate(self.kappa * (self.theta - record[i]),
-                                                    self.sigma * _modify(record[i]), dt, z[i])
+                                                    self.sigma * np.sqrt(_modify(record[i])), dt, z[i])
             return record
 
 
@@ -167,7 +172,8 @@ class CEV(Stochastic):
 
         """
             beta: skewness of volatility surface
-                beta >= 0
+                stocks: beta between 0 and 1, inclusive
+                commodity: beta greater than 0
         """
         
         Stochastic.__init__(self, s, r, sigma, t, q)
@@ -217,6 +223,8 @@ class Bachelier(CEV):
 class BlackScholes(CEV):
 
     def __init__(self, s, r, sigma, t, q=0.0):
+
+        """ Black Scholes is CEV with beta = 1 """
 
         CEV.__init__(self, s, r, sigma, t, 1, q)
 
@@ -341,6 +349,8 @@ class Heston(CoxIntergellRoss):
     def calibrate(self, n, tm, km, cm):
 
         """
+            // very slow
+
             calibration principle: only generate fft once for each pair of (s, t), calibrate for all expiries
             
             Step One: Data Reconstruction - from {(s,t,k,c)} to {(s,t): {(k,c)}}
@@ -355,12 +365,10 @@ class Heston(CoxIntergellRoss):
                 loop through the dictionary to calibrate
             
             n: int / the length of the payoffs (or the strikes)
-            
-            sm: the market initial price
+
             tm: the market expiry
             km: np.array / the market strikes
             cm: np.array / the market prices for options
-            b: bounds for parameters
         """
         
         d = {}
@@ -388,9 +396,9 @@ class Heston(CoxIntergellRoss):
 
         x = [self.sigma, self.kappa, self.theta, self.xi, self.rho]
         print(obj(x))
-        bd = ((0.01, 10), (0.01, 10), (0.01, 10), (0.01, 10), (-1, 1))
+        bd = ((0, 10), (0, 10), (0, 10), (0, 10), (-1, 0))
 
-        sol = minimize(obj, x, method='SLSQP', bounds=bd)
+        sol = minimize(obj, x, method='L-BFGS-B', bounds=bd)
         print(sol.x)
         print(obj(sol.x))
         return sol.x
@@ -414,14 +422,14 @@ class Heston(CoxIntergellRoss):
             s = self.s
             for i in range(n):
                 s += _generate(self.r * s, _modify(sigma) * s, dt, z1[i])
-                sigma += _generate(self.kappa * (self.theta - sigma), self.xi * _modify(sigma), dt, z2[i])
+                sigma += _generate(self.kappa * (self.theta - sigma), self.xi * np.sqrt(_modify(sigma)), dt, z2[i])
             return s
         else:
             record = np.zeros(n + 1)
             record[0] = self.s
             for i in range(n):
                 record[i+1] = record[i] + _generate(self.r * record[i], _modify(sigma) * record[i], dt, z1[i])
-                sigma += _generate(self.kappa * (self.theta - sigma), self.xi * _modify(sigma), dt, z2[i])
+                sigma += _generate(self.kappa * (self.theta - sigma), self.xi * np.sqrt(_modify(sigma)), dt, z2[i])
             return record
 
 
@@ -434,7 +442,7 @@ class SABR(CEV):
             the volatility is log-normal
 
             alpha: growth rate of the volatility
-            rho: correlations between two Brownian motions
+            rho: correlation between two Brownian motions
         """
 
         CEV.__init__(self, s, r, sigma, t, beta, q)
@@ -444,14 +452,16 @@ class SABR(CEV):
     def calibrate(self, n, sigma_m, km):
 
         """
-            calibrate for every expiry (t is the same)
+            calibrate the approximate closed-form implied volatility for every expiry
+
+            n: the number of sample
             sigma_m: the market volatility
-            f: the forward initial value = s * e^{rt}
             km: the market strike
 
             Note that self.sigma is the initial volatility
         """
 
+        # the forward price
         f = self.s * np.exp(self.r * self.t)
 
         def obj(x):
@@ -478,7 +488,7 @@ class SABR(CEV):
             return sse
 
         x = np.array([self.alpha, self.beta, self.rho, self.sigma])
-        bd = ((0, None), (0.8, 0.8), (-1, 1), (0, None))
+        bd = ((0, None), (0.5, 0.5), (-1, 1), (0, None))
         sol = minimize(obj, x, method='L-BFGS-B', bounds=bd)
 
         return sol.x
@@ -502,12 +512,12 @@ class SABR(CEV):
             s = self.s
             for i in range(n):
                 s += _generate(self.r * s, sigma * s ** self.beta, dt, z1[i])
-                sigma += _generate(0, self.alpha * sigma, dt, z2[i])
+                sigma += _generate(0, self.alpha * _modify(sigma), dt, z2[i])
             return s
         else:
             record = np.zeros(n + 1)
             record[0] = self.s
             for i in range(n):
                 record[i+1] = record[i] + _generate(self.r * record[i], sigma * record[i] ** self.beta, dt, z1[i])
-                sigma += _generate(0, self.alpha * sigma, dt, z2[i])
+                sigma += _generate(0, self.alpha * _modify(sigma), dt, z2[i])
             return record
