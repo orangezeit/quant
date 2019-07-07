@@ -2,9 +2,10 @@
 # Date: Apr 29, 2019  10:07 PM
 
 import numpy as np
+from scipy.linalg import inv
 from scipy.stats import norm
 from scipy.optimize import minimize
-
+from scipy.sparse import diags
 
 def _generate(mu, v, dt, z, method='Euler', dv=0.0):
 
@@ -62,6 +63,35 @@ def _modify(v, method='truncate'):
         return 0
     elif method == 'reflect':
         return -v
+
+
+def tri_diagonal_solver(a, b, c, d, mode):
+
+    if mode == '*':
+        x = np.zeros(len(b))
+        for i in range(-1, len(b) - 1):
+
+            if i == -1:
+                row = np.array([b[0], c[0]])
+            elif i == len(b) - 2:
+                row = np.array([a[-1], b[-1]])
+            else:
+                row = np.array([a[i], b[i + 1], c[i + 1]])
+            x[i + 1] = row @ d[max(i, 0):min(i + 3, len(b))]
+        return x
+    else:
+        bc, dc = map(np.array, (b, d))
+
+        for i in range(len(b) - 1):
+            bc[i + 1] -= a[i] / bc[i] * c[i]
+            dc[i + 1] -= a[i] / bc[i] * dc[i]
+
+        dc[-1] /= bc[-1]
+
+        for i in range(len(b) - 2, -1, -1):
+            dc[i] = (dc[i] - c[i] * dc[i + 1]) / bc[i]
+
+        return dc
 
 
 class Stochastic:
@@ -201,14 +231,55 @@ class CEV(Stochastic):
                 record[i+1] = record[i] + _generate(self.r * record[i], self.sigma * record[i] ** self.beta, dt, z[i])
             return record
 
-    def pde(self, ht, hs, smax, k1, k2=0, option='Euro', method='Euler-Explicit'):
+    def pde(self, ht, hs, smax, k1, k2, method='CN'):
 
-        n = self.t // ht
-        m = smax // hs
+        def lower(x): return (self.sigma ** 2 * x ** 2 - self.r * x) * ht / 2
+
+        def mid(x): return 1 - (self.sigma ** 2 * x ** 2 + self.r) * ht
+
+        def upper(x): return (self.sigma ** 2 * x ** 2 + self.r * x) * ht / 2
+
+        n = int(self.t / ht)
+        m = int(smax / hs)
 
         c = np.zeros((m-1, 1))
 
-        # payoff
+        for i in range(m-1):
+            if (i+1) * hs <= k1:
+                continue
+            elif (i+1) * hs >= k2:
+                c[i] = 5
+            else:
+                c[i] = (i+1) * hs - 285
+
+        d = c
+
+        md = np.array([mid(i) if method == 'EE' else 2 - mid(i) if method == 'EI' else 3 - mid(i) for i in range(1, m)])
+        ld = np.array([lower(i) if method == 'EE' else -lower(i) for i in range(2, m)])
+        ud = np.array([upper(i) if method == 'EE' else -upper(i) for i in range(1, m-1)])
+
+        if method == 'CN':
+            ld2 = np.negative(ld)
+            ud2 = np.negative(ud)
+            md2 = 4 - md
+
+        for i in range(n, 0, -1):
+
+            if method == 'EE':
+                c = tri_diagonal_solver(ld, md, ud, c, '*')
+                c[-1] += upper(m-1) * (k2 - k1) * np.exp(-self.r * (self.t - ht * i))
+            elif method == 'EI':
+                c[-1] += upper(m-1) * (k2 - k1) * np.exp(-self.r * (self.t - ht * i))
+                c = tri_diagonal_solver(ld, md, ud, c, '/')
+            else:
+                c = tri_diagonal_solver(ld2, md2, ud2, c, '*')
+                c[-1] += upper(m-1) * (k2 - k1) * (np.exp(-self.r * (self.t - ht * (i - 1))) + np.exp(-self.r * (self.t - ht * i)))
+                c = tri_diagonal_solver(ld, md, ud, c, '/')
+
+            #for j in range(m-1):
+                #c[j] = max(c[j], d[j])
+
+        return c[int(self.s // hs)]
 
 
 class Bachelier(CEV):

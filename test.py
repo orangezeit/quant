@@ -5,7 +5,7 @@ import stochastic
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-
+import time
 
 def no_arbitrage_test(num=16):
 
@@ -45,3 +45,58 @@ def no_arbitrage_test(num=16):
 
         plt.plot(strikes, density)
         plt.show()
+
+
+def TDMA_solver(a, b, c, d, mode='div', n=4):
+    if mode == 'mult':
+        x = np.zeros(n)
+        for i in range(-1, n-1):
+
+            if i == -1:
+                row = np.array([b[0], c[0]])
+            elif i == n - 2:
+                row = np.array([a[-1], b[-1]])
+            else:
+                row = np.array([a[i], b[i+1], c[i+1]])
+            x[i+1] = row @ d[max(i, 0):min(i+3, n)]
+        return x
+    else:
+        bc, dc = map(np.array, (b, d))
+
+        for i in range(n - 1):
+            bc[i + 1] -= a[i] / bc[i] * c[i]
+            dc[i + 1] -= a[i] / bc[i] * dc[i]
+
+        # xc = bc
+        dc[-1] /= bc[-1]
+
+        for i in range(n-2, -1, -1):
+            dc[i] = (dc[i] - c[i] * dc[i+1]) / bc[i]
+
+        return dc
+
+
+if __name__ == '__main__':
+    start = time.time()
+    t = 144/252
+    cev = stochastic.CEV(277.33, 0.0247, 0.1118, t, 1)
+    #ans1 = cev.pde(t / 1000, 1, 400, 285, 290, 'EE')
+    #ans2 = cev.pde(t / 1000, 0.5, 350, 285, 290, 'EI')
+    ans3 = cev.pde(t / 1000, 0.1, 350, 285, 290, 'CN')
+    print(ans3) # [3.2732151] [3.2540502] [3.26332504]  // 3.1764 // 3.1589 // 3.1483 // 3.1374 (286s) // 3.1335
+    print(time.time() - start)
+    """
+    A = np.array([[10,2,0,0],[3,10,4,0],[0,1,7,5],[0,0,3,4]],dtype=float)
+
+    a = np.array([3, 1, 3], dtype=float)
+    b = np.array([10, 10, 7, 4], dtype=float)
+    c = np.array([2, 4, 5], dtype=float)
+    d = np.array([3, 4, 5, 6], dtype=float)
+
+    print(TDMA_solver(a,b,c,d, 'mult'))
+    print(A @ d)
+    print(a)
+    print(b)
+    print(c)
+    print(d)
+    """
