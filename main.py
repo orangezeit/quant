@@ -1,7 +1,9 @@
-import pandas as pd
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
+
 import portfolio
+import statsmodels.api as sm
 
 
 def import_data(ticks):
@@ -23,92 +25,60 @@ def portfolio_ew(df, spy, long=1.0, short=0.0, cash=10000000.0):
     spy['SPY'] *= -cash * short / spy['SPY'][0] // 1
     df['sum'] = df['sum'] + spy['SPY']
 
-    df['return'] = df['sum'] - df['sum'][0]
     df['pct'] = (df['sum'] + cash - df['sum'][0]) / cash / (1 + short) - 1
 
     plt.plot(df['pct'])
 
 
-def portfolio_markowitz(df, spy, cash=100000000.0):
+def portfolio_markowitz(stocks, spy, long=0.8, cash=100000000.0):
 
-    rates = df.pct_change().shift(-1).dropna()
-    labels = []
-    flag = True
-    flag2 = False
-    s2 = [0.0]
-    long = 0.8
+    rates = stocks.pct_change().shift(-1).dropna()
+    labels = ['SPY']
 
-    nums_spy_c = cash * long / spy['SPY'][0] // 1
-    for r in (-2, -1):
-        sl = -0.1
-        st = -10000
-        for st in (-10, -5, -2, -1, -0.5, -0.2, -0.1, 0):
-            if r == -2 and flag2:
-                continue
-            for short in (0.0, ):
+    # SPY plot
+    ts_spy = [0.0 if i == 0 else spy['SPY'][i - 1] / spy['SPY'][0] - 1 for i in range(0, stocks.shape[0], 21)]
+    plt.plot(ts_spy)
 
-                nums = cash * long / df.shape[1] / np.array(df.iloc[0, :]) // 1
-                nums_spy = cash * short / spy['SPY'][0] // 1
+    for r, bounds in ((-2, None), (-1, (-0.1, -1))):
+        for short in (0.0, ):
 
-                s = [0.0]
+            shares = cash * long / stocks.shape[1] / stocks.iloc[0, :] // 1
+            share_spy = cash * short / spy['SPY'][0] // 1
 
-                leftover = cash * (1 - long)
+            ts = [0.0]
+            leftover = cash - shares @ stocks.iloc[0, :]
 
-                for i in range(21, 3138, 21):
-                    transact = 0
-                    rates_month = rates[(i-21):i]
+            for i in range(21, stocks.shape[0], 21):
 
-                    mus = np.array(rates_month.mean())
-                    covs = np.array(rates_month.cov())
+                vr = np.array(rates[(i - 21):i].mean())
+                sigma = np.array(rates[(i - 21):i].cov())
 
-                    if r == -2:
+                weights = portfolio.markovitz(sigma, vr, r, None, bounds).allocate()
 
-                        weights = portfolio.markovitz(covs, mus, r).allocate()
-                    else:
-                        weights = portfolio.markovitz(covs, mus, r, None, (sl, st)).allocate()
+                total = shares @ stocks.iloc[(i - 1), :] + leftover                        # total value
 
-                    temp = (s[-1] + 1) * cash * long * weights / np.array(df.iloc[(i-1), :]) // 1
-                    nums -= temp
+                temp = total * long * weights / stocks.iloc[(i - 1), :] // 1             # allocation
+                temp2 = total * short / spy['SPY'][i - 1] // 1
+                leftover = total - temp @ stocks.iloc[(i - 1), :]                        # new remain
 
-                    temp2 = (s2[-1] + 1) * cash * short / spy['SPY'][(i - 1)] // 1
-                    nums_spy -= temp2
+                leftover -= abs(shares - temp) @ stocks.iloc[(i-1), :] * 0.0001
+                leftover -= abs(share_spy - temp2) * spy['SPY'][i - 1] * 0.0001
 
-                    for j in range(df.shape[1]):
-                        leftover += (nums[j]) * df.iloc[(i-1), j]
-                        transact += abs((nums[j]) * df.iloc[(i-1), j]) * 0.0002
+                # test liquidity
+                if leftover < 0:
+                    print(leftover)
 
-                    leftover += nums_spy * spy['SPY'][(i-1)]
-                    transact += abs(nums_spy * spy['SPY'][(i-1)]) * 0.0002
-                    leftover -= transact
-                    if leftover < 0:
-                        print(leftover)
+                shares = temp
+                share_spy = temp2
 
-                    nums = temp
-                    nums_spy = temp2
-                    # a = np.vstack((a, msr.T))
+                ts.append(total / cash / (1 + short) - 1)
 
-                    sum_money = 0
-                    for j in range(df.shape[1]):
-                        sum_money += nums[j] * df.iloc[(i -1), j]
-                    sum_money += leftover
-                    sum_money -= nums_spy * spy['SPY'][(i-1)]
+            plt.plot(ts)
 
-                    s.append(sum_money / 100000000 - 1)
-
-                    if flag:
-                        s2.append(nums_spy_c * spy['SPY'][(i-1)] / 100000000 - 1)
-                flag = False
-                flag2 = True
-                plt.plot(s)
-                if r == -2:
-                    labels.append('{}, {}, {}'.format(short, r, 21))
-                else:
-                    labels.append('{}, {}, {}, {}, {}'.format(short, r, 21, '-inf', st))
-                #plt.show()
-
-
-    plt.plot(s2)
-    labels.append('spy')
+            if r == -2:
+                labels.append('{}, {}, {}'.format(short, r, 21))
+            else:
+                labels.append('{}, {}, {}, {}, {}'.format(short, r, 21, -0.1, -1))
 
     plt.legend(labels)
     plt.show()
@@ -116,9 +86,24 @@ def portfolio_markowitz(df, spy, cash=100000000.0):
 
 def bayes_stein(df, spy, cash=100000000.0):
 
+    rates = df.pct_change().shift(-1).dropna()
+    labels = ['SPY']
+    ts = np.empty(10)
 
 
-    pass
+    for i in range(21, 3138, 21):
+        mus = np.array(rates[(i - 21):i].mean())
+        ts = np.vstack((ts, mus))
+    print(ts[:,0])
+    """
+    test = arima.ARMA(ts[:, 0], (1, 1))
+    mod = test.fit()
+    print(mod.summary())
+    """
+    arma = sm.tsa.ARMA(ts[:,0], (1,1)).fit(disp=False)
+    res = arma.resid
+    sm.graphics.tsa.plot_acf(ts[:,0], lags=20)
+    plt.show()
 
 
 def sensitivity_analysis(df, c=2):
@@ -133,6 +118,42 @@ def sensitivity_analysis(df, c=2):
 
     return df
 
+
+def timing_factor(df, spy):
+
+    rates = df.pct_change().shift(-1).dropna()
+    z = 1
+
+    # momentum
+    rates['long_signal'] = (rates['BA'] > 0).rolling(3).sum()
+    rates['short_signal'] = (rates['BA'] < 0).rolling(3).sum()
+
+    # break through
+    df['long_break'] = (df['BA'] - df['BA'].rolling(3).mean() - z * df['BA'].rolling(3).std()) > 0
+    df['short_break'] = (df['BA'] - df['BA'].rolling(3).mean() + z * df['BA'].rolling(3).std()) < 0
+
+    # aggregate
+    k = 0
+    x = 0.05
+    df['test'] = 0
+
+    for i in range(df.shape[0]):
+
+        if df.iloc[i, 0] / df.iloc[k, 0] - 1 > x:
+            df.iloc[i, 12] = 1
+            k = i
+        elif df.iloc[i, 0] / df.iloc[k, 0] - 1 < -x:
+            df.iloc[i, 12] = -1
+            k = i
+
+    # variance adjustment
+
+    df['std'] = 1 / df['BA'].rolling(3).std()
+    plt.plot(df['std'])
+    plt.show()
+
+    print(df)
+    # print(df['test'].cumsum())    # short much more than long
 
 
 if __name__ == '__main__':
@@ -149,13 +170,10 @@ if __name__ == '__main__':
     plt.show()
     """
 
-
-
-
-
-
     portfolio_markowitz(stocks, spy)
+    #bayes_stein(stocks, spy)
     #plt.plot(stocks)
+    #timing_factor(stocks, spy)
     """
     plt.plot()
     plt.legend(['BA', 'CSCO', 'DHI', 'DIS', 'JNJ', 'JPM', 'KO', 'MSFT', 'NEE', 'XOM'])
