@@ -1,23 +1,24 @@
 # Author: Yunfei Luo
-# Date: Jul 28, 2019
-# version: 0.10.2 (in development)
+# Date: Aug 3, 2019
+# version: 0.11.1 (in development)
 
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.pylab as pylab
 
-from scipy.cluster.hierarchy import linkage
+from scipy.cluster.hierarchy import single, leaves_list
 from scipy.linalg import solve, inv
 from scipy.optimize import minimize
 from scipy.stats import gaussian_kde
+from scipy.spatial.distance import squareform
 from sklearn.covariance import ledoit_wolf, oas
 
-import random
 
-
-def estimate(df, mean_est=0, cov_est=0, alpha=0.0):
+def estimate(df, mean_est=0, cov_est=0, alpha=1e-10):
 
     """
-        estimate mean and covariance given historical data
+        Estimate mean and covariance given historical data
 
         Parameters
         ----------
@@ -33,7 +34,7 @@ def estimate(df, mean_est=0, cov_est=0, alpha=0.0):
             respectively from {'equal_weights', 'exponential_weights', 'ledoit_wolf', 'oas'}
 
         alpha: float, required if exponential_weights selected
-            0 <= alpha < 1, larger alpha means more weights on near
+            0 < alpha <= 1, larger alpha means more weights on near
             exponential_weights -> equal_weights if alpha -> 0
 
         Return
@@ -54,9 +55,9 @@ def estimate(df, mean_est=0, cov_est=0, alpha=0.0):
     elif cov_est == 1:
         cov = df.ewm(alpha=alpha).cov().iloc[-df.shape[1]:].values
     elif cov_est == 2:
-        cov = ledoit_wolf(df)[0]
+        cov, _ = ledoit_wolf(df)
     elif cov_est == 3:
-        cov = oas(df)[0]
+        cov, _ = oas(df)
     else:
         raise ValueError('Method does not exist.')
 
@@ -66,11 +67,11 @@ def estimate(df, mean_est=0, cov_est=0, alpha=0.0):
 class Markowitz:
 
     """
-        Markowitz Portfolio Allocation Problem
-        --------------------------------------
+        Markowitz Portfolio Allocation
+        ------------------------------
 
         Given n risky assets (and possibly one risk-free asset)
-        Find the optimal portfolio to maximize return and minimize variance
+        Find the optimal portfolio to maximize return and to minimize variance
     """
 
     def __init__(self, cov_mat, exp_ret, idx, target=None, rf=None,
@@ -79,10 +80,10 @@ class Markowitz:
         """
             Parameters
             ----------
-            cov_mat : np.ndarray
+            cov_mat : np.array
                 n * n covariance matrix of risky assets
 
-            exp_ret : np.ndarray
+            exp_ret : np.array
                 n-length array of expected (excess) returns of risky assets
 
             idx: int from {-2, -1, 1, 2}
@@ -92,26 +93,26 @@ class Markowitz:
                      1: Optimized given expected (excess) portfolio return
                      2: Optimized given expected portfolio variance
 
-            target: positive float or None[default], required if idx is 1 or 2, optional otherwise
+            target: positive float or None[default], required if idx is 1 or 2
                 target return if idx == 1, target variance if idx == 2
 
             rf: positive float or None[default], optional
-                Expected return for the risk-free asset (if applicable)
+                expected return for the risk-free asset (if applicable)
 
             bounds: tuple(tuple(float)) or None[default], optional
-                Bounds for weights
+                bounds for optimized weights
                     same bounds for each if len(bounds) is 1
                     different bounds for each if len(bounds) is n
 
-            mkt_neutral: bool, False in default, optional
+            mkt_neutral: bool, False[default], optional
                 indicates whether the portfolio is market-neutral
                 the sum of weights is 0 if true or 1 if false
 
-            gamma: float, 0.0 in default
-                parameter for L2
+            gamma: float, 0.0[default], optional
+                parameter for L2 (penalty for over-fitting)
 
-            tol: positive float, 1e-10 in default, optional
-                Tolerance for termination
+            tol: positive float, 1e-10[default], optional
+                tolerance for termination
         """
 
         if not isinstance(cov_mat, np.ndarray) or len(cov_mat.shape) != 2 or cov_mat.shape[0] != cov_mat.shape[1]:
@@ -180,7 +181,7 @@ class Markowitz:
 
             Return
             ------
-            weights: np.ndarray, n-length
+            weights: np.array, n-length
         """
 
         if self.bounds or self.mkt_neutral:
@@ -202,7 +203,7 @@ class Markowitz:
 
             Return
             ------
-            weights: np.ndarray, n-length
+            weights: np.array, n-length
         """
 
         if self.bounds or self.mkt_neutral:
@@ -224,7 +225,7 @@ class Markowitz:
 
             Return
             ------
-            weights: np.ndarray, n-length
+            weights: np.array, n-length
         """
 
         if self.bounds or self.mkt_neutral:
@@ -232,7 +233,8 @@ class Markowitz:
             cons = [{'type': 'eq', 'fun': lambda x: x @ self.exp_ret - self.target}]
             if self.rf is None:
                 cons.append(self.constraint)
-            self.weights = minimize(self._obj1, self.x0, bounds=self.bounds, constraints=cons, tol=self.tol).x
+            self.weights = minimize(self._obj1, self.x0, bounds=self.bounds,
+                                    constraints=cons, tol=self.tol).x
 
         else:
 
@@ -251,7 +253,7 @@ class Markowitz:
 
             Return
             ------
-            weights: np.ndarray, n-length
+            weights: np.array, n-length
         """
 
         if self.bounds or self.mkt_neutral:
@@ -259,7 +261,8 @@ class Markowitz:
             cons = [{'type': 'eq', 'fun': lambda x: x @ self.cov_mat @ x - self.target}]
             if self.rf is None:
                 cons.append(self.constraint)
-            self.weights = minimize(self._obj2, self.x0, bounds=self.bounds, constraints=cons, tol=self.tol).x
+            self.weights = minimize(self._obj2, self.x0, bounds=self.bounds,
+                                    constraints=cons, tol=self.tol).x
 
         else:
 
@@ -284,6 +287,38 @@ class Markowitz:
         else:
             return self._optimize_risk()
 
+    def efficient_frontier(self, n_sim=10000):
+
+        """ User API, plot scatter plot of simulated portfolios to visualize efficient frontier """
+
+        pylab.rcParams.update({'legend.fontsize': 'x-large',
+                               'axes.labelsize': 'x-large',
+                               'axes.titlesize': 'x-large',
+                               'xtick.labelsize': 'x-large',
+                               'ytick.labelsize': 'x-large'})
+
+        weights = np.empty((n_sim, self.n))
+
+        for i in range(n_sim):
+            weights[i] = np.random.random(self.n)
+            weights[i] /= weights[i].sum()
+
+        ret_ports = np.array([weights[i] @ self.exp_ret * 252 for i in range(n_sim)])
+        vol_ports = np.array([np.sqrt(weights[i] @ self.cov_mat @ weights[i] * 252) for i in range(n_sim)])
+        sharpe_ports = ret_ports / vol_ports
+
+        msr_ret, msr_vol = ret_ports[sharpe_ports.argmax()], vol_ports[sharpe_ports.argmax()]
+        gmv_ret, gmv_vol = ret_ports[vol_ports.argmin()], vol_ports[vol_ports.argmin()]
+
+        plt.figure(figsize=(12, 8), facecolor='lightgray')
+        plt.scatter(vol_ports, ret_ports, c=sharpe_ports, cmap='viridis')
+        plt.colorbar(label='Sharpe Ratio')
+        plt.xlabel('Volatility')
+        plt.ylabel('Return')
+        plt.scatter(msr_vol, msr_ret, c='red', s=50)
+        plt.scatter(gmv_vol, gmv_ret, c='orangered', s=50)
+        plt.show()
+
     def performance(self):
 
         """ User API, print performance analysis """
@@ -300,8 +335,8 @@ class Markowitz:
 class BlackLitterman:
 
     """
-        Black-Litterman Portfolio Allocation Problem
-        --------------------------------------------
+        Black-Litterman Portfolio Allocation
+        ------------------------------------
 
         Given n risky assets
         Find the optimal portfolio given the subjective views
@@ -313,10 +348,10 @@ class BlackLitterman:
             Parameters
             ----------
 
-            c: 2d np.array
+            c: np.array
                 n * n covariance matrix of risky assets
             w:
-                weight of market cap
+                n-length weights of market cap
 
             p * r = q + omega
 
@@ -325,7 +360,7 @@ class BlackLitterman:
             omega:
 
             xi: historical stock index
-                For US investors,
+                For US investors, it is 0.42667
             tau: subjective constant
                 sigma = tau * c
                 smaller -> larger confidence in covariance matrix
@@ -341,37 +376,81 @@ class BlackLitterman:
         temp = self.sigma @ p.T
         self.temp = temp @ inv(p @ temp + omega)
 
-    def _post_vr(self):
+    def _post_exp_ret(self):
+
+        """ Return posterior expected return """
 
         return self.pi + self.temp @ (self.q - self.p @ self.pi)
 
     def _post_sigma(self):
 
+        """ Return posterior covariance matrix """
+
         return self.sigma + self.c - self.temp @ self.p @ self.sigma
 
     def optimal_weights(self):
+
+        """ Return optimal weights based on posterior expected return and covariance matrix """
 
         return solve(self._post_sigma(), self._post_vr()) * self.xi
 
 
 class RiskParity:
 
-    """ Portfolio that focuses on risk allocation """
+    """ Focuses on risk allocation """
 
     def __init__(self, df):
 
+        """
+            Parameters
+            ----------
+            df: np.array (n.sample, n.feature)
+                historical data
+
+            cov: np.array
+                covariance matrix of historical data (n.feature * n.feature)
+
+        """
+
+        self.df = df
         _, self.cov = estimate(df)
-        self.corr = df.corr().values
 
     def ivp(self, cov=None):
 
-        """ inverse variance portfolio """
+        """
+            Inverse Variance Portfolio (IVP)
+                Weights are proportional to inverses of asset variances
 
-        _cov = self.cov if cov is None else cov
-        weights = 1 / np.diag(_cov)
-        return weights / weights.sum()
+            Parameter
+            ---------
+            cov: np.array, None[default] which maps to self.cov later
+                covariance matrix, optional for IVP, required for cluster variance
+
+            Return
+            ------
+            weights: np.array, n-length
+        """
+
+        diag = np.diag(self.cov if cov is None else cov)
+
+        weights = np.array([0 if d == 0 else 1 / d for d in diag])
+
+        return weights / weights.sum() if weights.sum() > 0 else weights
 
     def _cluster_var(self, idx):
+
+        """
+            Calculate variance of sub-portfolio (cluster variance)
+
+            Parameter
+            ---------
+            idx: indices of the cluster
+
+            Return
+            ------
+            var: float
+                cluster variance
+        """
 
         cov = self.cov[idx, :][:, idx]
         weights = self.ivp(cov)
@@ -379,58 +458,69 @@ class RiskParity:
 
     def hrp(self):
 
-        """ Hierarchy Risk Parity """
+        """
+            Hierarchy Risk Parity
+
+            Return
+            ------
+            weights: np.array, n-length
+        """
 
         # construct distance matrix
-        dist_mat = ((1 - self.corr) / 2) ** 0.5
-        link = linkage(dist_mat).astype(int)
+        dist_mat = squareform(((1 - self.df.corr().values) / 2) ** 0.5, checks=False)
+        if np.isnan(dist_mat).any():
+            np.nan_to_num(dist_mat, False)
 
-        # sort clustered indices by distance
-        idx = pd.Series([link[-1, 0], link[-1, 1]])
-        num = link[-1, 3]
+        # tree clustering / quasi-diagonalization
+        idx = leaves_list(single(dist_mat))
 
-        while idx.max() >= num:
-
-            idx.index *= 2
-            i, j = idx[idx >= num].index, idx[idx >= num].values - num
-            idx[i] = link[j, 0]
-            idx = idx.append(pd.Series(link[j, 1], index=i + 1)).sort_index()
-
-        # allocate weights by bisection
-        weights = pd.Series(1, index=idx)
-        idx = [idx.values]
+        # recursive bisection
+        weights = pd.Series([1] * len(idx))
+        idx = [idx]
 
         while len(idx):
-
-            idx = [i[j:k] for i in idx for j, k in ((0, len(i) // 2), (len(i) // 2, len(i))) if len(i) > 1]  # bisect
-
-            for i in range(0, len(idx), 2):  # assign pairwise weights
+            # bisect
+            idx = [i[j:k] for i in idx for j, k in ((0, len(i) // 2), (len(i) // 2, len(i))) if len(i) > 1]
+            # assign pairwise weights
+            for i in range(0, len(idx), 2):
 
                 var1 = self._cluster_var(idx[i])
                 var2 = self._cluster_var(idx[i + 1])
-                weights[idx[i]] *= var2 / (var1 + var2)
-                weights[idx[i + 1]] *= var1 / (var1 + var2)
+                if var1 and var2:
+                    weights[idx[i]] *= var2 / (var1 + var2)
+                    weights[idx[i + 1]] *= var1 / (var1 + var2)
+                else:
+                    weights[idx[i]] *= .5
+                    weights[idx[i + 1]] *= .5
 
-        return weights.sort_index().values
+        return weights.values
+
+    def trp(self, cutoff=0):
+
+        """
+            Tail Risk Parity
+                Minimize risk of potential loss
+
+            Parameter
+            ---------
+            cutoff: end point of the integral (risk measure)
+                indicates maximum loss of portfolio
+
+            Return
+            ------
+            weights: np.array, n-length
+        """
+
+        _, n = self.df.shape
+        x0 = np.array([1 / n] * n)
+        bound = ((0, np.inf),) * n
+        constraint = {'type': 'eq', 'fun': lambda x: np.sum(x) - 1}
+
+        return minimize(lambda weights: gaussian_kde((self.df * weights).sum(1)).integrate_box(-np.inf, cutoff),
+                        x0, bounds=bound, constraints=constraint).x
 
 
-def cvar(df, alpha=0.05):
-
-    x0 = np.array([1 / 10] * 10)   # initial guess
-    bounds = ((0, 1),) * 10
-    constraint = {'type': 'eq', 'fun': lambda x: np.sum(x) - 1}
-
-    def obj(w):
-
-        weighted_df = df * w
-        sample = gaussian_kde(weighted_df.values.T).resample(10000)
-        cutoff = weighted_df.quantile(alpha).values.reshape(10, 1)
-        return -sample[sample < cutoff].mean()
-
-    obj(x0)
-
-
-
+import random
 
 if __name__ == '__main__':
 
@@ -449,13 +539,6 @@ if __name__ == '__main__':
     #mk = Markowitz(covs, returns, 0.2, None, (0, 0))
     mk_test = Markowitz(covs, r, 1, bounds=((-np.inf, np.inf),), target=0.00376)
     mk_test2 = Markowitz(covs, r, 1, target=0.00376)
-    res = mk_test.allocate()
-    res2 = mk_test2.allocate()
-
-    mk_test.performance()
-    mk_test2.performance()
-
-    
 
     w = np.array([35/50, 10/50, 5/50])
     c = np.array([[7.344, 2.015, 3.309], [2.015, 4.410, 1.202], [3.309, 1.202, 3.497]]) / 100
@@ -468,18 +551,12 @@ if __name__ == '__main__':
     print(bl.optimal_weights())
     """
 
-
     # [201.22, 244.88, 16.83, 259.53, 370.59, 369.38, 221.56, 1060, 100.92, 332.47]
 
-    test_set = pd.DataFrame([[random.random() for _ in range(10)] for _ in range(30)])
-    rp = RiskParity(test_set)
-    w = rp.hrp()
-    print(w, sum(w))
+    test_set = pd.DataFrame([[random.uniform(-1, 1) for _ in range(10)] for _ in range(30)])
 
-
-
-
-
-
+    #cvar(test_set)
+    res = RiskParity(test_set).hrp()
+    print(res)
 
 
