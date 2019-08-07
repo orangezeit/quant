@@ -1,6 +1,9 @@
 # Author: Yunfei Luo
-# Date: Aug 3, 2019
-# version: 0.11.1 (in development)
+# Date: Aug 7, 2019
+# version: 0.11.2 (in development)
+
+
+from collections import deque
 
 import numpy as np
 import pandas as pd
@@ -42,6 +45,9 @@ def estimate(df, mean_est=0, cov_est=0, alpha=1e-10):
         mean, cov: np.array
             estimated mean (n.feature) and covariance (n.feature * n.feature)
     """
+
+    if not isinstance(df, pd.DataFrame):
+        raise TypeError('Historical data must be a data frame.')
 
     if mean_est == 0:
         mean = df.mean().values
@@ -93,33 +99,33 @@ class Markowitz:
                      1: Optimized given expected (excess) portfolio return
                      2: Optimized given expected portfolio variance
 
-            target: positive float or None[default], required if idx is 1 or 2
-                target return if idx == 1, target variance if idx == 2
+            target: positive float or None in default, required if idx is 1 or 2
+                target return if idx is 1, target variance if idx is 2
 
-            rf: positive float or None[default], optional
+            rf: positive float or None in default, optional
                 expected return for the risk-free asset (if applicable)
 
-            bounds: tuple(tuple(float)) or None[default], optional
+            bounds: tuple(tuple(float)) or None in default, optional
                 bounds for optimized weights
                     same bounds for each if len(bounds) is 1
                     different bounds for each if len(bounds) is n
 
-            mkt_neutral: bool, False[default], optional
+            mkt_neutral: bool, False in default, optional
                 indicates whether the portfolio is market-neutral
-                the sum of weights is 0 if true or 1 if false
+                sum of weights is 0 if true or 1 if false
 
-            gamma: float, 0.0[default], optional
+            gamma: float, 0.0 in default, optional
                 parameter for L2 (penalty for over-fitting)
 
-            tol: positive float, 1e-10[default], optional
+            tol: positive float, 1e-10 in default, optional
                 tolerance for termination
         """
 
         if not isinstance(cov_mat, np.ndarray) or len(cov_mat.shape) != 2 or cov_mat.shape[0] != cov_mat.shape[1]:
-            raise ValueError('Covariance matrix must be a square matrix')
+            raise ValueError('Covariance matrix must be a square matrix.')
 
         if not isinstance(exp_ret, np.ndarray) or len(exp_ret.shape) != 1 or len(exp_ret) != cov_mat.shape[0]:
-            raise ValueError('Expected return must be an array with same length as size of covariance matrix')
+            raise ValueError('Expected return must be an array with same length as size of covariance matrix.')
 
         if idx not in {-2, -1, 1, 2}:
             raise ValueError('Indicator must be -2, -1, 1 or 2.')
@@ -128,7 +134,7 @@ class Markowitz:
             raise ValueError('Target return or variance must be a positive float.')
 
         if rf is not None and not isinstance(rf, float):
-            raise ValueError('Risk-free rate must be None or a positive float')
+            raise ValueError('Risk-free rate must be None or a positive float.')
 
         if not isinstance(mkt_neutral, bool):
             raise ValueError('Market neutral must be true or false.')
@@ -190,9 +196,9 @@ class Markowitz:
                                     constraints=self.constraint, tol=self.tol).x
 
         else:
-
-            weights = solve(self.cov_mat, np.ones(self.n))  # calculate weights
-            self.weights = weights / np.sum(weights)        # scale to sum 1
+            # calculate weights and scale to sum 1
+            weights = solve(self.cov_mat, np.ones(self.n), overwrite_b=True)
+            self.weights = weights / np.sum(weights)
 
         return self.weights
 
@@ -212,9 +218,9 @@ class Markowitz:
                                     constraints=self.constraint, tol=self.tol).x
 
         else:
-
-            weights = solve(self.cov_mat, self.exp_ret)  # calculate weights
-            self.weights = weights / np.sum(weights)     # scale to sum 1
+            # calculate weights and scale to sum 1
+            weights = solve(self.cov_mat, self.exp_ret)
+            self.weights = weights / np.sum(weights)
 
         return self.weights
 
@@ -291,11 +297,8 @@ class Markowitz:
 
         """ User API, plot scatter plot of simulated portfolios to visualize efficient frontier """
 
-        pylab.rcParams.update({'legend.fontsize': 'x-large',
-                               'axes.labelsize': 'x-large',
-                               'axes.titlesize': 'x-large',
-                               'xtick.labelsize': 'x-large',
-                               'ytick.labelsize': 'x-large'})
+        pylab.rcParams.update({'legend.fontsize': 'x-large', 'axes.labelsize': 'x-large', 'axes.titlesize': 'x-large',
+                               'xtick.labelsize': 'x-large', 'ytick.labelsize': 'x-large'})
 
         weights = np.empty((n_sim, self.n))
 
@@ -347,23 +350,30 @@ class BlackLitterman:
         """
             Parameters
             ----------
-
             c: np.array
                 n * n covariance matrix of risky assets
-            w:
+
+            w: np.array
                 n-length weights of market cap
 
             p * r = q + omega
 
-            p:
-            q:
-            omega:
+            p: np.array
+                k * n subjective views
 
-            xi: historical stock index
-                For US investors, it is 0.42667
-            tau: subjective constant
-                sigma = tau * c
-                smaller -> larger confidence in covariance matrix
+            q: np.array
+                n-length expected return of each view
+
+            omega: np.array
+                n * n diagonal covariance that represents uncertainty of each view
+
+            xi: float, 0.42667 in default
+                historical stock index, 0.42667 for US investors
+
+            sigma = tau * c
+
+            tau: float, 0.1 in default
+                subjective constant, smaller -> larger confidence in covariance matrix
         """
 
         self.c = c
@@ -382,7 +392,7 @@ class BlackLitterman:
 
         return self.pi + self.temp @ (self.q - self.p @ self.pi)
 
-    def _post_sigma(self):
+    def _post_cov_mat(self):
 
         """ Return posterior covariance matrix """
 
@@ -392,7 +402,7 @@ class BlackLitterman:
 
         """ Return optimal weights based on posterior expected return and covariance matrix """
 
-        return solve(self._post_sigma(), self._post_vr()) * self.xi
+        return solve(self._post_cov_mat(), self._post_exp_ret()) * self.xi
 
 
 class RiskParity:
@@ -409,7 +419,6 @@ class RiskParity:
 
             cov: np.array
                 covariance matrix of historical data (n.feature * n.feature)
-
         """
 
         self.df = df
@@ -423,7 +432,7 @@ class RiskParity:
 
             Parameter
             ---------
-            cov: np.array, None[default] which maps to self.cov later
+            cov: np.array, None in default which maps to self.cov later
                 covariance matrix, optional for IVP, required for cluster variance
 
             Return
@@ -432,7 +441,6 @@ class RiskParity:
         """
 
         diag = np.diag(self.cov if cov is None else cov)
-
         weights = np.array([0 if d == 0 else 1 / d for d in diag])
 
         return weights / weights.sum() if weights.sum() > 0 else weights
@@ -444,7 +452,8 @@ class RiskParity:
 
             Parameter
             ---------
-            idx: indices of the cluster
+            idx: np.array
+                indices of the cluster
 
             Return
             ------
@@ -459,7 +468,7 @@ class RiskParity:
     def hrp(self):
 
         """
-            Hierarchy Risk Parity
+            Hierarchical Risk Parity
 
             Return
             ------
@@ -471,31 +480,34 @@ class RiskParity:
         if np.isnan(dist_mat).any():
             np.nan_to_num(dist_mat, False)
 
-        # tree clustering / quasi-diagonalization
+        # record leaves of cluster tree
         idx = leaves_list(single(dist_mat))
 
-        # recursive bisection
-        weights = pd.Series([1] * len(idx))
-        idx = [idx]
+        # bisect recursively and assign pairwise weights
+        weights = np.ones(len(idx))
+        dq = deque([idx])
 
-        while len(idx):
-            # bisect
-            idx = [i[j:k] for i in idx for j, k in ((0, len(i) // 2), (len(i) // 2, len(i))) if len(i) > 1]
-            # assign pairwise weights
-            for i in range(0, len(idx), 2):
+        while len(dq):
 
-                var1 = self._cluster_var(idx[i])
-                var2 = self._cluster_var(idx[i + 1])
-                if var1 and var2:
-                    weights[idx[i]] *= var2 / (var1 + var2)
-                    weights[idx[i + 1]] *= var1 / (var1 + var2)
-                else:
-                    weights[idx[i]] *= .5
-                    weights[idx[i + 1]] *= .5
+            p = dq.popleft()
+            p1, p2 = p[:len(p)//2], p[len(p)//2:]
+            var1, var2 = self._cluster_var(p1), self._cluster_var(p2)
 
-        return weights.values
+            if var1 and var2:
+                weights[p1] *= var2 / (var1 + var2)
+                weights[p2] *= var1 / (var1 + var2)
+            else:
+                weights[p1] *= .5
+                weights[p2] *= .5
 
-    def trp(self, cutoff=0):
+            if len(p1) > 1:
+                dq.append(p1)
+            if len(p2) > 1:
+                dq.append(p2)
+
+        return weights
+
+    def trp(self, cutoff=0.0):
 
         """
             Tail Risk Parity
@@ -503,8 +515,8 @@ class RiskParity:
 
             Parameter
             ---------
-            cutoff: end point of the integral (risk measure)
-                indicates maximum loss of portfolio
+            cutoff: float, 0.0 in default
+                end point of integral (risk measure) which indicates maximum loss of portfolio
 
             Return
             ------
@@ -519,8 +531,6 @@ class RiskParity:
         return minimize(lambda weights: gaussian_kde((self.df * weights).sum(1)).integrate_box(-np.inf, cutoff),
                         x0, bounds=bound, constraints=constraint).x
 
-
-import random
 
 if __name__ == '__main__':
 
@@ -553,9 +563,8 @@ if __name__ == '__main__':
 
     # [201.22, 244.88, 16.83, 259.53, 370.59, 369.38, 221.56, 1060, 100.92, 332.47]
 
-    test_set = pd.DataFrame([[random.uniform(-1, 1) for _ in range(10)] for _ in range(30)])
+    test_set = pd.DataFrame([[np.random.uniform(-1, 1) for _ in range(10)] for _ in range(30)])
 
-    #cvar(test_set)
     res = RiskParity(test_set).hrp()
     print(res)
 
