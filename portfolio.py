@@ -1,6 +1,6 @@
 # Author: Yunfei Luo
 # Date: Aug 7, 2019
-# version: 0.11.2 (in development)
+# version: 0.11.3 (in development)
 
 
 from collections import deque
@@ -326,6 +326,9 @@ class Markowitz:
 
         """ User API, print performance analysis """
 
+        if self.weights is None:
+            raise TypeError('Weights are not calculated yet.')
+
         port_ret = self.weights @ self.exp_ret
         port_var = self.weights @ self.cov_mat @ self.weights
 
@@ -359,13 +362,13 @@ class BlackLitterman:
             p * r = q + omega
 
             p: np.array
-                k * n subjective views
+                k * n subjective views, k <= n
 
             q: np.array
-                n-length expected return of each view
+                k-length expected return of each view
 
             omega: np.array
-                n * n diagonal covariance that represents uncertainty of each view
+                k * k diagonal covariance that represents uncertainty of each view
 
             xi: float, 0.42667 in default
                 historical stock index, 0.42667 for US investors
@@ -402,7 +405,7 @@ class BlackLitterman:
 
         """ Return optimal weights based on posterior expected return and covariance matrix """
 
-        return solve(self._post_cov_mat(), self._post_exp_ret()) * self.xi
+        return solve(self._post_cov_mat(), self._post_exp_ret(), overwrite_a=True, overwrite_b=True) * self.xi
 
 
 class RiskParity:
@@ -443,7 +446,11 @@ class RiskParity:
         diag = np.diag(self.cov if cov is None else cov)
         weights = np.array([0 if d == 0 else 1 / d for d in diag])
 
-        return weights / weights.sum() if weights.sum() > 0 else weights
+        if weights.sum():
+            return weights / weights.sum()
+        else:
+            print('Warning: Weights sum up to 0.')
+            return weights
 
     def _cluster_var(self, idx):
 
@@ -478,6 +485,7 @@ class RiskParity:
         # construct distance matrix
         dist_mat = squareform(((1 - self.df.corr().values) / 2) ** 0.5, checks=False)
         if np.isnan(dist_mat).any():
+            print('Warning: Invalid data in distance matrix.')
             np.nan_to_num(dist_mat, False)
 
         # record leaves of cluster tree
@@ -529,43 +537,4 @@ class RiskParity:
         constraint = {'type': 'eq', 'fun': lambda x: np.sum(x) - 1}
 
         return minimize(lambda weights: gaussian_kde((self.df * weights).sum(1)).integrate_box(-np.inf, cutoff),
-                        x0, bounds=bound, constraints=constraint).x
-
-
-if __name__ == '__main__':
-
-    # test code
-    """
-    r = np.array([0.10, 0.09, 0.16])
-    r2 = np.array([-0.001237, 0.004848, -0.003694, 0.007403, -0.000610])
-    covs = np.array([[0.09, -0.03, 0.084], [-0.03, 0.04, 0.012], [0.084, 0.012, 0.16]])
-    covs2 = np.array([[0.002027, -0.000362,  0.000099, -0.000220, -0.000305],
-                      [-0.000362, 0.002421, 0.000297, 0.000090, 0.000151],
-                      [0.000099, 0.000297, 0.002420, 0.000020, 0.000113],
-                      [-0.000220,  0.000090,  0.000020,  0.002302, 0.000047],
-                      [-0.000305,  0.000151,  0.000113,  0.000047,  0.002877]])
-
-    #mka = Markowitz(covs, returns, 0.2, None, None)
-    #mk = Markowitz(covs, returns, 0.2, None, (0, 0))
-    mk_test = Markowitz(covs, r, 1, bounds=((-np.inf, np.inf),), target=0.00376)
-    mk_test2 = Markowitz(covs, r, 1, target=0.00376)
-
-    w = np.array([35/50, 10/50, 5/50])
-    c = np.array([[7.344, 2.015, 3.309], [2.015, 4.410, 1.202], [3.309, 1.202, 3.497]]) / 100
-
-    p = np.array([[1, 0, 0], [-1, 1, 0]])
-    q = np.array([2.5/100, 2/100])
-    omega = np.array([[0.01, 0], [0, 0.015]]) ** 2
-
-    bl = BlackLitterman(c, w, p, q, omega)
-    print(bl.optimal_weights())
-    """
-
-    # [201.22, 244.88, 16.83, 259.53, 370.59, 369.38, 221.56, 1060, 100.92, 332.47]
-
-    test_set = pd.DataFrame([[np.random.uniform(-1, 1) for _ in range(10)] for _ in range(30)])
-
-    res = RiskParity(test_set).hrp()
-    print(res)
-
-
+                        x0, bounds=bound, constraints=constraint, tol=1e-10).x
