@@ -1,6 +1,8 @@
 # Author: Yunfei Luo
-# Date: Aug 7, 2019
+# Date: Aug 13, 2019
+# 0.1.0
 
+from functools import reduce
 import numpy as np
 from scipy.linalg import solve_banded
 from scipy.optimize import minimize
@@ -124,10 +126,78 @@ class Stochastic:
         self.sigma = sigma
         self.t = t
 
+    def _simulate(self, n, path, rate, delta_x, delta_w1, sv=False, delta_sigma=None, delta_w2=None, rho=0.0):
+
+        """
+            dx = delta_x * dt + delta_w1 * dW_1
+            d(sigma) = delta_sigma * dt + delta_w2 * dW_2
+            Cov(dW_1, dW_2) = rho
+
+            Parameters
+            ----------
+            n: int
+                number of simulations
+
+            path: bool
+                the final value ('num') or the entire simulation ('path')
+
+            rate: bool
+
+            delta_x: function
+
+            delta_w1: function
+                to describe how the first Brownian motion varies
+
+            sv: bool, False in default
+                whether
+            delta_sigma: function, None in default
+
+            delta_w2:
+
+            rho: float, 0.0 in default
+
+            Return
+            ------
+            x or record: np.array if path is True, float if path is False
+        """
+
+        x = self.r if rate else self.s
+        sigma = self.sigma
+
+        if sv:
+            z1, z2 = np.random.multivariate_normal([0, 0], [[1, rho], [rho, 1]], n).T
+        else:
+            z1 = np.random.normal(size=n)
+
+        if path:
+            record = np.zeros(n)
+
+        def move(c, i):
+            # global sigma
+            c += _generate(delta_x(c), delta_w1(c, sigma), self.t / n, z1[i])
+            if sv:
+                sigma += _generate(delta_sigma(sigma), delta_w2(sigma), self.t / n, z2[i])
+            if path:
+                record[i] = c
+            return c
+
+        x = reduce(move, range(n), x)
+
+        """
+        for i in range(n):
+            x += _generate(delta_x(x), delta_w1(x, sigma), self.t / n, z1[i])
+            if sv:
+                sigma += _generate(delta_sigma(sigma), delta_w2(sigma), self.t / n, z2[i])
+            if path:
+                record[i] = x
+        """
+
+        return record if path else x
+
 
 class OrnsteinUhlenbeck(Stochastic):
 
-    """ Also known as Vasicek process """
+    """ Interest rate model, also known as Vasicek process """
 
     def __init__(self, r, sigma, t, kappa, theta, s=0.0, q=0.0):
         
@@ -141,42 +211,15 @@ class OrnsteinUhlenbeck(Stochastic):
                 level of mean reversion
         """
         
-        Stochastic.__init__(self, s, r, sigma, t, q)
+        super().__init__(s, r, sigma, t, q)
         self.kappa = kappa
         self.theta = theta
 
-    def simulate(self, n=1000, output='num'):
+    def simulate(self, n=100, path=False):
 
-        """
-            dr = [kappa * (theta - r)] * dt + [sigma] * dW
+        """ dr = [kappa * (theta - r)] * dt + [sigma] * dW """
 
-            Parameters
-            ----------
-            n: int, 1000 in default
-                number of randoms
-
-            output: str, 'num' in default
-                the final value ('num') or the entire simulation ('path')
-
-            Return
-            ------
-            r or record: float if output is 'num', np.array if output is 'path'
-        """
-
-        dt = self.t / n
-        z = np.random.normal(size=n)
-
-        if output == 'num':
-            r = self.r
-            for i in range(n):
-                r += _generate(self.kappa * (self.theta - r), self.sigma, dt, z[i])
-            return r
-        else:
-            record = np.zeros(n+1)
-            record[0] = self.r
-            for i in range(n):
-                record[i+1] = record[i] + _generate(self.kappa * (self.theta - record[i]), self.sigma, dt, z[i])
-            return record
+        return super()._simulate(n, path, True, lambda r: self.kappa * (self.theta - r), lambda r, sigma: self.sigma)
 
 
 class CoxIntergellRoss(Stochastic):
@@ -195,43 +238,16 @@ class CoxIntergellRoss(Stochastic):
                 level of mean reversion
         """
         
-        Stochastic.__init__(self, s, r, sigma, t, q)
+        super().__init__(s, r, sigma, t, q)
         self.kappa = kappa
         self.theta = theta
 
-    def simulate(self, n=1000, output='num'):
+    def simulate(self, n=100, path=False, cutoff='truncate'):
 
-        """
-            dr = [kappa * (theta - r)] * dt + [sigma * sqrt(r)] * dW
+        """ dr = [kappa * (theta - r)] * dt + [sigma * sqrt(r)] * dW """
 
-            Parameters
-            ----------
-            n: int, 1000 in default
-                number of randoms
-
-            output: str, 'num' in default
-                the final value ('num') or the entire simulation ('path')
-
-            Return
-            ------
-            r or record: float if output is 'num', np.array if output is 'path'
-        """
-
-        dt = self.t / n
-        z = np.random.normal(size=n)
-
-        if output == 'num':
-            r = self.r
-            for i in range(n):
-                r += _generate(self.kappa * (self.theta - r), self.sigma * np.sqrt(_modify(r)), dt, z[i])
-            return r
-        else:
-            record = np.zeros(n+1)
-            record[0] = self.r
-            for i in range(n):
-                record[i+1] = record[i] + _generate(self.kappa * (self.theta - record[i]),
-                                                    self.sigma * np.sqrt(_modify(record[i])), dt, z[i])
-            return record
+        return super()._simulate(n, path, True, lambda r: self.kappa * (self.theta - r),
+                                 lambda r, sigma: self.sigma * np.sqrt(_modify(r, cutoff)))
 
 
 class CEV(Stochastic):
@@ -246,97 +262,133 @@ class CEV(Stochastic):
                 greater than 1 for commodity
         """
         
-        Stochastic.__init__(self, s, r, sigma, t, q)
+        super().__init__(s, r, sigma, t, q)
         self.beta = beta
 
-    def simulate(self, n=1000, output='num'):
+    def simulate(self, n=100, path=False):
+
+        """ ds = [r * s] * dt + [sigma * s ** beta] * dW """
+
+        return super()._simulate(n, path, False,
+                                 lambda s: self.r * s, lambda s, sigma: self.sigma * s ** self.beta)
+
+    def pde(self, ht, hs, s_max, euro, option, k1, k2=0.0, grid='CN'):
 
         """
-            ds = [r * s] * dt + [sigma * s ** beta] * dW
+            PDE Scheme
 
             Parameters
             ----------
-            n: int, 1000 in default
-                number of randoms
+            ht: positive float
+                time mesh
 
-            output: str, 'num' in default
-                the final value ('num') or the entire simulation ('path')
+            hs: positive float
+                price mesh
 
-            Return
-            ------
-            r or record: float if output is 'num', np.array if output is 'path'
+            s_max: positive float
+                maximum stock price in scheme
+
+            euro: bool
+                European option if True, American option if False
+
+            option: str
+                option type selected from {call, put, call-spread, put-spread}
+
+            k1: float
+                (first) strike
+
+            k2: float, 0.0 in default, required if option is call-spread or put-spread
+                (second) strike
+
+            grid: str
+                scheme type selected from {'EE', 'EI', 'CN'}
+                    EE: Euler Explicit
+                    EI: Euler Implicit
+                    CN: Crank Nicolson
         """
 
-        dt = self.t / n
-        z = np.random.normal(size=n)
+        if not isinstance(ht, float) or ht <= 0.0:
+            raise ValueError('Time mesh must be a positive float.')
 
-        if output == 'num':
-            s = self.s
-            for i in range(n):
-                s += _generate(self.r * s, self.sigma * s ** self.beta, dt, z[i])
-            return s
+        if not isinstance(hs, float) or hs <= 0.0:
+            raise ValueError('Price mesh must be a positive float.')
+
+        if not isinstance(s_max, float) or s_max <= 0.0:
+            raise ValueError('Maximum stock price in scheme must be a positive float.')
+
+        if not isinstance(euro, bool):
+            raise ValueError('')
+
+        if not isinstance(k1, float) or k1 <= 0.0:
+            raise ValueError('First strike must be positive float.')
+
+        if option in ('call-spread', 'put-spread') and (not isinstance(k2, float) or k2 < k1):
+            raise ValueError('Second strike must be positive float not less than first strike.')
+
+        if grid not in ('EE', 'EI', 'CN'):
+            raise ValueError('Not Defined. Scheme type must be selected from {EE, EI, CN}.')
+
+        m = int(s_max / hs)
+
+        if option == 'call':
+            c = np.array([max(0.0, (i + 1) * hs - k1) for i in range(m - 1)])
+        elif option == 'put':
+            c = np.array([max(0.0, k1 - (i + 1) * hs) for i in range(m - 1)])
+        elif option == 'call-spread':
+            c = np.array([min(max(0.0, (i + 1) * hs - k1), k2 - k1) for i in range(m - 1)])
+        elif option == 'put-spread':
+            c = np.array([max(min(k2 - k1, k1 - (i + 1) * hs), 0.0) for i in range(m - 1)])
         else:
-            record = np.zeros(n+1)
-            record[0] = self.s
-            for i in range(n):
-                record[i+1] = record[i] + _generate(self.r * record[i], self.sigma * record[i] ** self.beta, dt, z[i])
-            return record
-
-    def pde(self, ht, hs, smax, k1, k2, method='CN'):
-
-        """ PDE Scheme """
-
-        def lower(x): return (self.sigma ** 2 * x ** (2 * self.beta) * hs ** (2 * self.beta - 2) - self.r * x) * ht / 2
-
-        def mid(x): return 1 - (self.sigma ** 2 * x ** (2 * self.beta) * hs ** (2 * self.beta - 2) + self.r) * ht
-
-        def upper(x): return (self.sigma ** 2 * x ** (2 * self.beta) * hs ** (2 * self.beta - 2) + self.r * x) * ht / 2
-
-        n = int(self.t / ht)
-        m = int(smax / hs)
-
-        c = np.zeros((m-1, 1))
-
-        for i in range(m-1):
-            if (i+1) * hs <= k1:
-                continue
-            elif (i+1) * hs >= k2:
-                c[i] = 5
-            else:
-                c[i] = (i+1) * hs - 285
+            raise ValueError('Not defined. Option type must be selected from {}.')
 
         d = c.copy()
 
-        md = np.array([mid(i) if method == 'EE' else 2 - mid(i) if method == 'EI' else 3 - mid(i) for i in range(1, m)])
-        ld = np.array([0 if i == m else lower(i) if method == 'EE' else -lower(i) for i in range(2, m+1)])
-        ud = np.array([0 if i == 0 else upper(i) if method == 'EE' else -upper(i) for i in range(0, m-1)])
+        def lower(x):
+            return (self.sigma ** 2 * x ** (2 * self.beta) * hs ** (2 * self.beta - 2) - self.r * x) * ht / 2
+
+        def mid(x):
+            return 1 - (self.sigma ** 2 * x ** (2 * self.beta) * hs ** (2 * self.beta - 2) + self.r) * ht
+
+        def upper(x):
+            return (self.sigma ** 2 * x ** (2 * self.beta) * hs ** (2 * self.beta - 2) + self.r * x) * ht / 2
+
+        md = np.array([mid(i) if grid == 'EE' else 2 - mid(i) if grid == 'EI' else 3 - mid(i) for i in range(1, m)])
+        ld = np.array([0 if i == m else lower(i) if grid == 'EE' else -lower(i) for i in range(2, m + 1)])
+        ud = np.array([0 if i == 0 else upper(i) if grid == 'EE' else -upper(i) for i in range(0, m - 1)])
         diag = np.array([ud, md, ld])
 
-        if method == 'CN':
+        if grid == 'CN':
             diag2 = np.array([-ud, 4 - md, -ld])
 
-        for i in range(n, 0, -1):
+        def euler_explicit(v, i):
+            v = dia_matrix((diag, [1, 0, -1]), shape=(m - 1, m - 1)).dot(v)
+            v[0] += lower(1) * d[0] * np.exp(-self.r * (self.t - ht * i))
+            v[-1] += upper(m - 1) * d[-1] * np.exp(-self.r * (self.t - ht * i))
+            return v if euro else np.maximum(v, d * np.exp(-self.r * (self.t - ht * i)))
 
-            if method == 'EE':
-                c = dia_matrix((diag, [1, 0, -1]), shape=(m-1, m-1)).dot(c)
-                c[-1] += upper(m-1) * d[-1] * np.exp(-self.r * (self.t - ht * i))
-            elif method == 'EI':
-                c[-1] += upper(m-1) * d[-1] * np.exp(-self.r * (self.t - ht * i))
-                c = solve_banded((1, 1), diag, c, overwrite_b=True)
-            elif method == 'CN':
-                c = dia_matrix((diag2, [1, 0, -1]), shape=(m-1, m-1)).dot(c)
-                c[-1] += upper(m - 1) * d[-1] * (
-                            np.exp(-self.r * (self.t - ht * (i - 1))) + np.exp(-self.r * (self.t - ht * i)))
-                c = solve_banded((1, 1), diag, c, overwrite_b=True)
+        def euler_implicit(v, i):
+            v[0] += lower(1) * d[0] * np.exp(-self.r * (self.t - ht * i))
+            v[-1] += upper(m - 1) * d[-1] * np.exp(-self.r * (self.t - ht * i))
+            v = solve_banded((1, 1), diag, v, overwrite_b=True)
+            return v if euro else np.maximum(v, d * np.exp(-self.r * (self.t - ht * i)))
 
-            for j in range(m-1):
-                if (j + 1) * hs <= k1:
-                    continue
-                elif (j + 1) * hs >= k2:
-                    temp = 5
-                else:
-                    temp = (j + 1) * hs - 285
-                c[j] = max(c[j], temp * np.exp(-self.r * (self.t - ht * i)))
+        def crank_nicolson(v, i):
+            v = dia_matrix((diag2, [1, 0, -1]), shape=(m - 1, m - 1)).dot(v)
+            v[0] += lower(1) * d[0] * (
+                    np.exp(-self.r * (self.t - ht * (i - 1))) + np.exp(-self.r * (self.t - ht * i)))
+            v[-1] += upper(m - 1) * d[-1] * (
+                    np.exp(-self.r * (self.t - ht * (i - 1))) + np.exp(-self.r * (self.t - ht * i)))
+            v = solve_banded((1, 1), diag, v, overwrite_b=True)
+            return v if euro else np.maximum(v, d * np.exp(-self.r * (self.t - ht * i)))
+
+        n = int(self.t / ht)
+
+        if grid == 'EE':
+            c = reduce(euler_explicit, range(n, 0, -1), c)
+        elif grid == 'EI':
+            c = reduce(euler_implicit, range(n, 0, -1), c)
+        elif grid == 'CN':
+            c = reduce(crank_nicolson, range(n, 0, -1), c)
 
         return c[int(self.s / hs)]
 
@@ -401,11 +453,11 @@ class BlackScholes(CEV):
         pass
 
 
-class Heston(CoxIntergellRoss):
+class Heston(Stochastic):
 
     """ Price is log-normal and volatility follows Cox-Intergell-Ross process """
 
-    def __init__(self, sigma, kappa, theta, xi, rho, s, r, t=1, alpha=2.0, q=0.0):
+    def __init__(self, s, r, sigma, kappa, theta, xi, rho, t=1, alpha=2.0, q=0.0):
 
         """
             Additional Parameters
@@ -420,7 +472,9 @@ class Heston(CoxIntergellRoss):
                 damping factor
         """
 
-        CoxIntergellRoss.__init__(self, r, sigma, t, kappa, theta, s, q)
+        Stochastic.__init__(self, s, r, sigma, t, q)
+        self.kappa = kappa
+        self.theta = theta
         self.xi = xi
         self.rho = rho
         self.alpha = alpha
@@ -549,56 +603,30 @@ class Heston(CoxIntergellRoss):
 
             return sse
 
-        x = np.array([self.sigma, self.kappa, self.theta, self.xi, self.rho])
+        parameters = np.array([self.sigma, self.kappa, self.theta, self.xi, self.rho])
         bd = ((0, 10), (0, 10), (0, 10), (0, 10), (-1, 0))
-        sol = minimize(obj, x, method='L-BFGS-B', bounds=bd)
+        sol = minimize(obj, parameters, method='L-BFGS-B', bounds=bd)
 
         return sol.x
-    
-    def simulate(self, n=1000, output='num', grid='Euler', method='cutoff'):
+
+    def simulate(self, n=100, path=False, cutoff='truncate'):
 
         """
-                         ds = [r * s] * dt + [sqrt(sigma) * s] * dW_1
-                   d(sigma) = [kappa * (theta - sigma)] * dt + [xi * sqrt(sigma)] * dW_2
+            ds = [r * s] * dt + [sqrt(sigma) * s] * dW_1
+            d(sigma) = [kappa * (theta - sigma)] * dt + [xi * sqrt(sigma)] * dW_2
             Cov(dW_1, dW_2) = rho * dt
-
-            Parameters
-            ----------
-            n: int, 1000 in default
-                number of randoms
-
-            output: str, 'num' in default
-                the final value ('num') or the entire simulation ('path')
-
-            Return
-            ------
-            r or record: float if output is 'num', np.array if output is 'path'
         """
 
-        dt = self.t / n
-        z1, z2 = np.random.multivariate_normal([0, 0], [[1, self.rho], [self.rho, 1]], n).T
-        sigma = self.sigma
-        
-        if output == 'num':
-            s = self.s
-            for i in range(n):
-                s += _generate(self.r * s, _modify(sigma) * s, dt, z1[i])
-                sigma += _generate(self.kappa * (self.theta - sigma), self.xi * np.sqrt(_modify(sigma)), dt, z2[i])
-            return s
-        else:
-            record = np.zeros(n + 1)
-            record[0] = self.s
-            for i in range(n):
-                record[i+1] = record[i] + _generate(self.r * record[i], _modify(sigma) * record[i], dt, z1[i])
-                sigma += _generate(self.kappa * (self.theta - sigma), self.xi * np.sqrt(_modify(sigma)), dt, z2[i])
-            return record
+        return super()._simulate(n, path, False, lambda s: self.r * s, lambda s, sigma: _modify(sigma, cutoff) * s,
+                                 True, lambda sigma: self.kappa * (self.theta - sigma),
+                                 lambda sigma: self.xi * np.sqrt(_modify(sigma, cutoff)), self.rho)
 
 
-class SABR(CEV):
+class SABR(Stochastic):
 
     """ Price follows CEV process and volatility is log-normal"""
 
-    def __init__(self, sigma, alpha, beta, rho, s, r, t=1, q=0.0):
+    def __init__(self, s, r, sigma, alpha, beta, rho, t=1, q=0.0):
 
         """
             Additional Parameters
@@ -610,8 +638,9 @@ class SABR(CEV):
                 -1 <= rho <= 1, correlation between two Brownian motions
         """
 
-        CEV.__init__(self, s, r, sigma, t, beta, q)
+        super().__init__(s, r, sigma, t, q)
         self.alpha = alpha
+        self.beta = beta
         self.rho = rho
 
     def calibrate(self, n, sigma_m, km):
@@ -662,46 +691,20 @@ class SABR(CEV):
 
             return sse
 
-        x = np.array([self.alpha, self.beta, self.rho, self.sigma])
+        parameters = np.array([self.alpha, self.beta, self.rho, self.sigma])
         bd = ((0, None), (0.5, 0.5), (-1, 1), (0, None))
-        sol = minimize(obj, x, method='L-BFGS-B', bounds=bd)
+        sol = minimize(obj, parameters, method='L-BFGS-B', bounds=bd)
 
         return sol.x
 
-    def simulate(self, n=1000, output='num'):
+    def simulate(self, n=100, path=False, cutoff='truncate'):
 
         """
-                         ds = [r * s] * dt + [sigma * s ** beta] * dW_1
-                   d(sigma) = [alpha * sigma] * dW_2
+            ds = [r * s] * dt + [sigma * s ** beta] * dW_1
+            d(sigma) = [alpha * sigma] * dW_2
             Cov(dW_1, dW_2) = rho * dt
-
-            Parameters
-            ----------
-            n: int, 1000 in default
-                number of randoms
-
-            output: str, 'num' in default
-                the final value ('num') or the entire simulation ('path')
-
-            Return
-            ------
-            r or record: float if output is 'num', np.array if output is 'path'
         """
 
-        dt = self.t / n
-        z1, z2 = np.random.multivariate_normal([0, 0], [[1, self.rho], [self.rho, 1]], n).T
-        sigma = self.sigma
-        
-        if output == 'num':
-            s = self.s
-            for i in range(n):
-                s += _generate(self.r * s, sigma * s ** self.beta, dt, z1[i])
-                sigma += _generate(0, self.alpha * _modify(sigma), dt, z2[i])
-            return s
-        else:
-            record = np.zeros(n + 1)
-            record[0] = self.s
-            for i in range(n):
-                record[i+1] = record[i] + _generate(self.r * record[i], sigma * record[i] ** self.beta, dt, z1[i])
-                sigma += _generate(0, self.alpha * _modify(sigma), dt, z2[i])
-            return record
+        return super()._simulate(n, path, False, lambda s: self.r * s, lambda s, sigma: sigma * s ** self.beta,
+                                 True, lambda sigma: 0, lambda sigma: self.alpha * _modify(sigma, cutoff), self.rho)
+
