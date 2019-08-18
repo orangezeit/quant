@@ -1,6 +1,6 @@
 # Author: Yunfei Luo
 # Date: Aug 7, 2019
-# version: 0.11.3 (in development)
+# Version: 0.11.3 (in development)
 
 
 from collections import deque
@@ -18,7 +18,7 @@ from scipy.spatial.distance import squareform
 from sklearn.covariance import ledoit_wolf, oas
 
 
-def estimate(df, mean_est=0, cov_est=0, alpha=1e-10):
+def estimate(df, mean_est='equal_weights', cov_est='equal_weights', alpha=1e-10):
 
     """
         Estimate mean and covariance given historical data
@@ -28,13 +28,13 @@ def estimate(df, mean_est=0, cov_est=0, alpha=1e-10):
         df: pd.DataFrame (n.sample, n.feature)
             historical data
 
-        mean_est: int from {0, 1}
+        mean_est: str
             method to estimate mean
-            respectively from {'equal_weights', 'exponential_weights'}
+            selected from {'equal_weights', 'exponential_weights'}
 
-        cov_est: int from {0, 1, 2, 3}
+        cov_est: str
             method to estimate covariance
-            respectively from {'equal_weights', 'exponential_weights', 'ledoit_wolf', 'oas'}
+            selected from {'equal_weights', 'exponential_weights', 'ledoit_wolf', 'oas'}
 
         alpha: float, required if exponential_weights selected
             0 < alpha <= 1, larger alpha means more weights on near
@@ -47,22 +47,25 @@ def estimate(df, mean_est=0, cov_est=0, alpha=1e-10):
     """
 
     if not isinstance(df, pd.DataFrame):
-        raise TypeError('Historical data must be a data frame.')
+        raise TypeError('Historical data must be data frame.')
 
-    if mean_est == 0:
+    if not isinstance(alpha, float):
+        raise TypeError('Parameter alpha must be float.')
+
+    if mean_est == 'equal_weights':
         mean = df.mean().values
-    elif mean_est == 1:
+    elif mean_est == 'exponential_weights':
         mean = df.ewm(alpha=alpha).mean().iloc[-1].values
     else:
         raise ValueError('Method does not exist.')
 
-    if cov_est == 0:
+    if cov_est == 'equal_weights':
         cov = df.cov().values
-    elif cov_est == 1:
+    elif cov_est == 'exponential_weights':
         cov = df.ewm(alpha=alpha).cov().iloc[-df.shape[1]:].values
-    elif cov_est == 2:
+    elif cov_est == 'ledoit_wolf':
         cov, _ = ledoit_wolf(df)
-    elif cov_est == 3:
+    elif cov_est == 'oas':
         cov, _ = oas(df)
     else:
         raise ValueError('Method does not exist.')
@@ -81,7 +84,7 @@ class Markowitz:
     """
 
     def __init__(self, cov_mat, exp_ret, idx, target=None, rf=None,
-                 bounds=None, mkt_neutral=False, gamma=0.0, tol=1e-10):
+                 bounds=None, mkt_neutral=False, gamma=0.0, tol=1e-30):
 
         """
             Parameters
@@ -122,16 +125,16 @@ class Markowitz:
         """
 
         if not isinstance(cov_mat, np.ndarray) or len(cov_mat.shape) != 2 or cov_mat.shape[0] != cov_mat.shape[1]:
-            raise ValueError('Covariance matrix must be a square matrix.')
+            raise ValueError('Covariance matrix must be square matrix.')
 
         if not isinstance(exp_ret, np.ndarray) or len(exp_ret.shape) != 1 or len(exp_ret) != cov_mat.shape[0]:
-            raise ValueError('Expected return must be an array with same length as size of covariance matrix.')
+            raise ValueError('Expected return must be array with same length as size of covariance matrix.')
 
         if idx not in {-2, -1, 1, 2}:
             raise ValueError('Indicator must be -2, -1, 1 or 2.')
 
         if idx in {1, 2} and not isinstance(target, float):
-            raise ValueError('Target return or variance must be a positive float.')
+            raise ValueError('Target return or variance must be positive float.')
 
         if rf is not None and not isinstance(rf, float):
             raise ValueError('Risk-free rate must be None or a positive float.')
@@ -216,7 +219,6 @@ class Markowitz:
 
             self.weights = minimize(self._obj2, self.x0, bounds=self.bounds,
                                     constraints=self.constraint, tol=self.tol).x
-
         else:
             # calculate weights and scale to sum 1
             weights = solve(self.cov_mat, self.exp_ret)
@@ -262,35 +264,28 @@ class Markowitz:
             weights: np.array, n-length
         """
 
-        if self.bounds or self.mkt_neutral:
-
-            cons = [{'type': 'eq', 'fun': lambda x: x @ self.cov_mat @ x - self.target}]
-            if self.rf is None:
-                cons.append(self.constraint)
-            self.weights = minimize(self._obj2, self.x0, bounds=self.bounds,
-                                    constraints=cons, tol=self.tol).x
-
-        else:
-
-            # one-asset / two-asset theorems
-            gmv = np.zeros(self.n) if self.rf else self._gmv()
-            msr = self._msr()
-            a = (self.target - gmv @ self.cov_mat @ gmv) / (msr @ self.cov_mat @ msr - gmv @ self.cov_mat @ gmv)
-            self.weights = a * msr + (1 - a) * gmv
+        cons = [{'type': 'eq', 'fun': lambda x: x @ self.cov_mat @ x - self.target}]
+        if self.rf is None:
+            cons.append(self.constraint)
+        self.weights = minimize(self._obj2, self.x0, bounds=self.bounds,
+                                constraints=cons, tol=self.tol).x
 
         return self.weights
 
-    def allocate(self):
+    def allocate(self, idx, target=None):
 
         """ User API, return desired optimized weights given indicator """
 
-        if self.idx == -2:
+        i = idx if idx else self.idx
+        if i == -2:
             return self._gmv()
-        elif self.idx == -1:
+        elif i == -1:
             return self._msr()
-        elif self.idx == 1:
+        elif i == 1:
+            self.target = target
             return self._optimize_return()
         else:
+            self.target = target
             return self._optimize_risk()
 
     def efficient_frontier(self, n_sim=10000):
@@ -322,6 +317,14 @@ class Markowitz:
         plt.scatter(gmv_vol, gmv_ret, c='orangered', s=50)
         plt.show()
 
+    def _portfolio_return(self):
+
+        return self.weights @ self.exp_ret
+
+    def _portfolio_variance(self):
+
+        return self.weights @ self.cov_mat @ self.weights
+
     def performance(self):
 
         """ User API, print performance analysis """
@@ -329,12 +332,12 @@ class Markowitz:
         if self.weights is None:
             raise TypeError('Weights are not calculated yet.')
 
-        port_ret = self.weights @ self.exp_ret
+        port_ret = self._portfolio_return()
         port_var = self.weights @ self.cov_mat @ self.weights
 
         print('Optimized weights:   ', self.weights)
-        print('Expected Return:     ', port_ret)
-        print('Portfolio Variance:  ', port_var)
+        print('Expected Return:     ', )
+        print('Portfolio Variance:  ', self._portfolio_variance())
         print('Sharpe Ratio:        ', port_ret / port_var)
 
 
@@ -345,7 +348,7 @@ class BlackLitterman:
         ------------------------------------
 
         Given n risky assets
-        Find the optimal portfolio given the subjective views
+        Find the optimal portfolio given subjective views
     """
 
     def __init__(self, c, w, p, q, omega, xi=0.42667, tau=0.1):
