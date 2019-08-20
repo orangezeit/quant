@@ -236,7 +236,34 @@ def portfolio_passive(stocks, benchmark, long_ratio=0.8, cash=100000000.0):
     plt.plot(stocks['pct'].values)
 
 
-def portfolio_active(rates, stocks, benchmark, indices, label='SPY', empty=False, long_ratio=0.8, cash=100000000.0):
+def momentum(rates):
+
+    '''
+    use momentum as a timing factor
+    if the total number of the short signal exceeds that of the long signal, then we should sell all the stocks until the long sigal again passes the short signal
+    '''
+    # short_sig > long_sig
+    return (rates < 0).rolling(21).sum() > (rates >= 0).rolling(21).sum().values
+
+
+def zscore(rates):
+    '''
+    use zscore as a timing factor
+    if the total number of the short signal exceeds that of the long signal, then we should sell all the stocks until the long sigal again passes the short signal
+    '''
+    temp = rates - rates.rolling(21).mean() / rates.rolling(21).std()
+    return temp < temp.rolling(21).mean()
+
+
+def withdrawal(rates, r=-0.15):
+    '''
+    once the price of the SPY500 drops a certain level, we will sell all the stocks
+    '''
+
+    return rates < r
+
+
+def portfolio_active(rates, stocks, benchmark, indices, label='SPY', empty=False, long_ratio=0.8, cash=100000000.0, extra=None):
 
     if empty:
         benchmark[f'{label}_mean'] = benchmark[f'{label}'].rolling(21).mean()
@@ -247,33 +274,45 @@ def portfolio_active(rates, stocks, benchmark, indices, label='SPY', empty=False
         ts = []
         shares = cash * long_ratio / stocks.shape[1] / stocks.iloc[0].values // 1
         leftover = cash - shares @ stocks.iloc[0].values
-
+        total = cash
+        enter = False
+        print(benchmark.shape[0])
         for day in range(1, benchmark.shape[0]):  # stocks
+
+            if day % 21 == 0:
+                vr, sigma = portfolio.estimate(rates[day - 21:day])
+
+                if bound:
+                    weights = portfolio.Markowitz(sigma, vr, r, bounds=(bound,)).allocate(r)
+                else:
+                    if r == -3:
+                        weights = portfolio.RiskParity(rates[day - 21:day]).ivp()
+                    elif r == -4:
+                        weights = portfolio.RiskParity(rates[day - 21:day]).hrp()
+                    elif r == -5:
+                        weights = portfolio.RiskParity(rates[day - 21:day]).trp()
+                    else:
+                        weights = portfolio.Markowitz(sigma, vr, r).allocate()
+
             # print(day)
             short_signal = benchmark.iloc[day, 0] < benchmark.iloc[day, 1] if day >= 20 and empty else False
+            if extra:
+                short_signal = extra.iloc[day, 0] if day >= 20 and empty else False
 
             if short_signal:
+                enter = True
                 ts.append(ts[-1])
             else:
                 prices = stocks.iloc[day - 1].values
 
+                if enter:
+                    shares = total * long_ratio * weights / prices // 1
+                    leftover = cash - shares @ prices - abs(shares @ prices) * 0.0001
+                    enter = False
+
                 if day % 21:
                     ts.append((shares @ prices + leftover) / cash - 1)
                 else:
-
-                    vr, sigma = portfolio.estimate(rates[day - 21:day])
-
-                    if bound:
-                        weights = portfolio.Markowitz(sigma, vr, r, bounds=(bound,)).allocate()
-                    else:
-                        if r == -3:
-                            weights = portfolio.RiskParity(rates[day - 21:day]).ivp()
-                        elif r == -4:
-                            weights = portfolio.RiskParity(rates[day - 21:day]).hrp()
-                        elif r == -5:
-                            weights = portfolio.RiskParity(rates[day - 21:day]).trp()
-                        else:
-                            weights = portfolio.Markowitz(sigma, vr, r).allocate()
 
                     # recalculate total value, reallocate assets and calculate new leftover
                     total = shares @ prices + leftover
@@ -297,21 +336,28 @@ def portfolio_active(rates, stocks, benchmark, indices, label='SPY', empty=False
 
 
 if __name__ == '__main__':
-
+    """
     mark = 'ETF50'
     tks = ['601398.SS', '600028.SS', '600019.SS', '600018.SS', '600050.SS',
            '600519.SS', '000063.SZ', '002024.SZ', '000839.SZ', '600177.SS']
+    """
 
-    #mark = 'SPY'
-    #tks = ['BA', 'CSCO', 'DHI', 'DIS', 'JNJ', 'JPM', 'KO', 'MSFT', 'NEE', 'XOM']
+
+    mark, tks = 'SPY', ['BA', 'CSCO', 'DHI', 'DIS', 'JNJ', 'JPM', 'KO', 'MSFT', 'NEE', 'XOM']
 
     stks, bm = import_data(tks, mark)
-
+    # moment = momentum(bm.copy())
+    z = zscore(bm.copy())
     rs = stks.pct_change().shift(-1).dropna()
+    #moment = momentum(rs.copy())
+    #z = zscore(rs.copy())
+    #wd = withdrawal(rs.copy())
     stks = stks.shift(-1).dropna()
     bm = bm.shift(-1).dropna()
 
     idxs = (0, 3028)
 
-    portfolio_passive(stks.copy(), bm.copy())
-    portfolio_active(rs, stks, bm, idxs, mark, True)
+    # portfolio_passive(stks.copy(), bm.copy())
+    portfolio_active(rs, stks, bm, idxs, mark, True, extra=z)
+
+
