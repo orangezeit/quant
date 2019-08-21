@@ -1,11 +1,10 @@
 # Stochastic
 
+[![python_ver](https://img.shields.io/badge/python-3.6-brightgreen.svg)](https://www.python.org/)
+[![numpy_ver](https://img.shields.io/badge/numpy-1.17-brightgreen.svg)](https://docs.scipy.org/doc/)
+[![scipy_ver](https://img.shields.io/badge/scipy-1.3-brightgreen.svg)](https://docs.scipy.org/doc/)
+
 Stochastic Processes and Option Pricing
-
-## Dependency
-
-* numpy
-* scipy
 
 ## Option Types
 
