@@ -1,12 +1,11 @@
 # Author: Yunfei Luo
-# Date: Aug 18, 2019
-# Version: 0.2.1 (in development)
+# Date: Aug 31, 2019
+# Version: 0.3.3 (in development)
 
 
 from functools import reduce
 
 import numpy as np
-
 from scipy.fftpack import fft
 from scipy.linalg import solve_banded
 from scipy.optimize import minimize
@@ -20,10 +19,10 @@ options = {'call': lambda st, k: np.maximum(0.0, st - k), 'put': lambda st, k: n
            'call-binary': lambda st, k: (st > k).astype(float), 'put-binary': lambda st, k: (st < k).astype(float)}
 
 
-def select_basket(basket, paths, based, pack):
+def basket_option(basket, paths, pack):
 
     """
-        Select basket option based on multiple underlying assets
+        basket option pricing based on multiple underlying assets
 
         Parameters
         ----------
@@ -33,13 +32,24 @@ def select_basket(basket, paths, based, pack):
         paths: np.array
             simulation paths of assets
 
-        based: str
-            based exercise type selected from {'European', 'American'}
+        pack: tuple(str, str, float[, ...], int
+            parameters for option pricing
+
+            based: str
+                based exercise type selected from {'European', 'American'}
+
+            option: str
+                option type selected from {'call', 'put', 'call-spread', 'put-spread', 'call-binary', 'put-binary'}
+
+            strikes: float
+
+            times: int
+                number of simulations
 
         Return
         ------
-        path: np.array
-            desired simulation path
+        p: float
+            simulated option price
     """
 
     if basket == 'min':
@@ -51,7 +61,7 @@ def select_basket(basket, paths, based, pack):
     else:
         raise ValueError('Method does not exist.')
 
-    option, *strikes, times = pack
+    based, option, *strikes, times = pack
 
     if based == 'European':
         return np.array([options[option](reduce(fun, paths[:, i, :])[-1], *strikes) for i in range(times)]).mean()
@@ -248,162 +258,185 @@ class Stochastic:
         if sv:
             z1, z2 = np.random.multivariate_normal([0, 0], [[1, rho], [rho, 1]], n).T
         else:
-            z1 = np.random.normal(size=n)
+            z1, z2 = np.random.normal(size=n), None
 
-        if path:
-            record = np.zeros(n)
+        record = np.empty(n + 1)
+        record.fill(x)
 
         for i in range(n):
-            x += _generate(delta_x(x), delta_w1(x, sigma), self.t / n, z1[i])
+            record[i+1] = record[i] + _generate(delta_x(record[i]), delta_w1(record[i], sigma), self.t / n, z1[i])
             if sv:
                 sigma += _generate(delta_sigma(sigma), delta_w2(sigma), self.t / n, z2[i])
-            if path:
-                record[i] = x
 
-        return record if path else x
+        return record if path else record[-1]
 
-    def _simulate(self, path, setting, pack):
+    def _simulate(self, setting, pack):
 
         """
             Simulation and option pricing based on one underlying asset
 
             Parameters
             ----------
-            path: bool
-                return entire simulation if True and final value if False
+            setting: tuple(int, float, lambda, lambda[, bool, lambda, lambda, float])
+                     (n, rate, delta_x, delta_w1[, sv, delta_sigma, delta_w2, rho])
 
-            setting: tuple(n, rate, delta_x, delta_w1[, sv, delta_sigma, delta_w2, rho])
                 parameters and functions for Monte-Carlo simulation
 
-            pack: tuple(str, str, float[, ...], int, None or tuple(str, float, str))
-                parameters for option pricing
+            pack: path or tuple(str, str, float[, ...], int,
+                                          None or tuple(str, float, float), None of tuple(float[,...]))
+                  bool or (option, exercise, style, strikes, times,
+                                          info(act, barrier, rebate), timestamps)
+
+                simulation indicator or parameters for option pricing
+
+                path: bool
+                    return entire simulation if True and final value if False
+
+                OR
 
                 option: str
                     option type selected from {'call', 'put', 'call-spread', 'put-spread', 'call-binary', 'put-binary'}
 
                 exercise: str
-                    exercise type selected from {'European', 'American', 'Asian-fixed', 'Asian-float'
+                    exercise type selected from {'vanilla', 'Asian-fixed', 'Asian-float',
                                                  'lookback-fixed', 'lookback-float', 'barrier'}
+
+                style: str
+                    style type selected from {'European', 'American', 'Bermudan'}
 
                 strikes: float
 
                 times: int
                     number of simulations
 
-                info: None or tuple(str, float, str)
+                info: None or tuple(str, float, float)
                     extra information, required if 'barrier' is selected
 
                     act: str
-                        activation type selected from {'up-and-out', 'down-and-out', 'up-and-in', 'down-and-in'}
+                        activation type selected from {'up-out', 'down-out', 'up-in', 'down-in'}
 
                     barrier: float
-                        the spot price to activate or deactivate based exercise
+                        spot price to activate or deactivate based exercise
 
-                    based: str
-                        based exercise type selected from {'European', 'American'}
+                    rebate: float
+                        rebate to pay if deactivated
 
             Return
             ------
             p: float
-                (simulated) option price
+                simulated price / path / option price
         """
 
-        if isinstance(path, bool):
-            raise TypeError('Variable path must be bool.')
+        if isinstance(pack, bool):
+            return self.monte_carlo(pack, *setting)
 
-        if pack is None:
-            return self.monte_carlo(path, *setting)
-
-        option, exercise, *strikes, times, info = pack
+        option, exercise, style, *strikes, times, info, moments = pack
 
         if not isinstance(times, int) or times <= 0:
-            raise ValueError('Number of simulation must be positive int.')
+            raise ValueError('Number of simulations must be positive int.')
+
+        def early_exercise(mc, fn, style, moments, _float=False):
+
+            n = setting[0]
+
+            """
+            permits = np.empty()
+            if style == 'Bermudan':
+                permits = n - moments * n
+            """
+
+            if _float:
+                def backward(p, i):
+                    return max(options[option](mc[i], fn(mc, i)), p * np.exp(-self.r * self.t / n))
+                return reduce(backward, range(1, n), options[option](mc[0], fn(mc, 0)))
+            else:
+                def backward(p, i):
+                    return max(options[option](fn(mc, i), *strikes), p * np.exp(-self.r * self.t / n))
+                return reduce(backward, range(1, n), options[option](fn(mc, 0), *strikes))
 
         if option in options:
-            if exercise == 'European':
-                return options[option](np.array([self.monte_carlo(False, *setting) for _ in range(times)]),
-                                       *strikes).mean()
-            elif exercise == 'American':  # not correct
 
-                p_sum = 0.0
-                n, _ = setting
-                for _ in range(times):
-                    mc = np.flip(self.monte_carlo(True, *setting))
+            if exercise == 'barrier':
 
-                    def backward(p, i):
-                        return max(options[option](mc[i], *strikes), p * np.exp(-self.r * self.t / n))
-
-                    p_sum += reduce(backward, range(1, n), options[option](mc[0], *strikes))
-
-                return p_sum / times
-
-            elif exercise == 'Asian-fixed':
-                return options[option](np.array([self.monte_carlo(True, *setting).mean() for _ in range(times)]),
-                                       *strikes).mean()
-            elif exercise == 'Asian-float':
-
-                p_sum = 0.0
-
-                for _ in range(times):
-                    mc = self.monte_carlo(True, *setting)
-                    p_sum += options[option](mc.mean(), mc[-1])
-
-                return p_sum / times
-
-            elif exercise == 'lookback-fixed':
-
-                if option.split('-')[0] == 'call':
-                    mc = np.array([self.monte_carlo(True, *setting).max() for _ in range(times)])
-                else:
-                    mc = np.array([self.monte_carlo(True, *setting).min() for _ in range(times)])
-                return options[option](mc, *strikes).mean()
-
-            elif exercise == 'lookback-float':
-
-                p_sum = 0.0
-
-                for _ in range(times):
-                    mc = self.monte_carlo(True, *setting)
-                    if option.split('-')[0] == 'call':
-                        p_sum += options[option](mc.max(), mc[-1])
-                    else:
-                        p_sum += options[option](mc.min(), mc[-1])
-
-                return p_sum / times
-
-            elif exercise == 'barrier':
-
-                act, barrier, based = info
+                act, barrier, rebate = info
 
                 if not isinstance(barrier, float):
                     raise ValueError('Barrier must be float.')
 
-                if based not in ('European', 'American'):
-                    raise ValueError('Based exercise type must be selected from {European, American}.')
+                if not isinstance(rebate, float):
+                    raise ValueError('Rebate must be float.')
 
-                acts = {'up-and-out': lambda p: (p < barrier).all(),
-                        'down-and-out': lambda p: (p > barrier).all(),
-                        'up-and-in': lambda p: (p > barrier).any(),
-                        'down-and-in': lambda p: (p < barrier).any()}
+                acts = {'up-out': lambda p: (p < barrier).all(), 'down-out': lambda p: (p > barrier).all(),
+                        'up-in': lambda p: (p > barrier).any(), 'down-in': lambda p: (p < barrier).any()}
 
-                if act not in acts:
-                    raise ValueError('Activation type does not exist.')
+                if style == 'European':
 
-                p_sum = 0.0
+                    def cutoff(key, mc):
+                        return options[option](mc[-1], *strikes) if acts[key](mc) else rebate
 
-                for _ in range(times):
-                    mc = self.monte_carlo(True, *setting)
+                elif style == 'American' or style == 'Bermudan':
 
-                    if acts[act](mc):
-                        if based == 'European':
-                            p_sum += options[option](mc[-1], *strikes)
-                        else:
-                            pass
+                    def cutoff(key, mc):
+                        return early_exercise(mc, lambda x, i: x[i], style, moments) if acts[key](mc) else rebate
+                else:
+                    raise ValueError('Style type doest not exist.')
 
-                return p_sum / times
+                return np.fromiter((cutoff(act, self.monte_carlo(True, *setting)) for _ in range(times)),
+                                   dtype=np.float).mean()
+
+            elif style == 'European':
+
+                fns = {'float': lambda fn, mc: (mc[-1], fn(mc)), 'lookback': lambda mc: mc.min()
+                       if (option.split('-')[0] == 'call') ^ (exercise == 'lookback-fixed') else mc.max()}
+
+                if exercise == 'vanilla':
+
+                    return np.fromiter((options[option](self.monte_carlo(False, *setting), *strikes)
+                                        for _ in range(times)), dtype=np.float).mean()
+
+                elif exercise == 'Asian-fixed':
+
+                    return np.fromiter((options[option](self.monte_carlo(True, *setting).mean(), *strikes)
+                                        for _ in range(times)), dtype=np.float).mean()
+
+                elif exercise == 'Asian-float':
+
+                    return np.fromiter((options[option](*fns['float'](lambda x: x.mean(), self.monte_carlo(True, *setting)))
+                                        for _ in range(times)), dtype=np.float).mean()
+
+                elif exercise == 'lookback-fixed':
+
+                    return np.fromiter((options[option](fns['lookback'](self.monte_carlo(True, *setting)), *strikes)
+                                        for _ in range(times)), dtype=np.float).mean()
+
+                elif exercise == 'lookback-float':
+
+                    return np.fromiter((options[option](*fns['float'](fns['lookback'], self.monte_carlo(True, *setting)))
+                                        for _ in range(times)), dtype=np.float).mean()
+
+                else:
+
+                    raise ValueError('Exercise type does not exist.')
+
+            elif style == 'American' or style == 'Bermudan':
+
+                fns = {'vanilla': lambda x, i: x[i], 'Asian': lambda x, i: x[i:].mean(),
+                       'lookback-fixed-call': lambda x, i: x[i:].max(), 'lookback-fixed-put': lambda x, i: x[i:].min(),
+                       'lookback-float-call': lambda x, i: x[i:].min(), 'lookback-float-put': lambda x, i: x[i:].max()}
+
+                exercise, *ff = exercise.split('-')
+                _float = False
+                if len(ff):
+                    _float = ff[0] == 'float'
+                print(*ff, _float)
+                if exercise == 'lookback':
+                    exercise = '-'.join((exercise, *ff, option.split('-')[0]))
+
+                return np.fromiter((early_exercise(np.flip(self.monte_carlo(True, *setting)), fns[exercise],
+                                    style, moments, _float) for _ in range(times)), dtype=np.float).mean()
 
             else:
-                raise ValueError('Exercise type does not exist.')
+                raise ValueError('Style type does not exist.')
         else:
             raise ValueError('Option type does not exist.')
 
@@ -435,12 +468,11 @@ class OrnsteinUhlenbeck(Stochastic):
         self.kappa = kappa
         self.theta = theta
 
-    def simulate(self, n=100, path=False, pack=None):
+    def simulate(self, n=100, pack=False):
 
         """ dr = [kappa * (theta - r)] * dt + [sigma] * dW """
 
-        return super()._simulate(path, (n, True, lambda x: self.kappa * (self.theta - x), lambda x, y: self.sigma),
-                                 pack)
+        return super()._simulate((n, True, lambda x: self.kappa * (self.theta - x), lambda x, y: self.sigma), pack)
 
 
 class CoxIntergellRoss(Stochastic):
@@ -470,11 +502,11 @@ class CoxIntergellRoss(Stochastic):
         self.kappa = kappa
         self.theta = theta
 
-    def simulate(self, n=100, path=False, cutoff='truncate', pack=None):
+    def simulate(self, n=100, pack=False, cutoff='truncate'):
 
         """ dr = [kappa * (theta - r)] * dt + [sigma * sqrt(r)] * dW """
 
-        return super()._simulate(path, (n, True, lambda r: self.kappa * (self.theta - r),
+        return super()._simulate((n, True, lambda r: self.kappa * (self.theta - r),
                                  lambda r, sigma: self.sigma * np.sqrt(_modify(r, cutoff))), pack)
 
 
@@ -492,17 +524,16 @@ class CEV(Stochastic):
         
         super().__init__(s, r, sigma, t, q)
 
-        if not isinstance(beta, float):
-            raise ValueError('Skewness of volatility surface must be float.')
+        if not isinstance(beta, float) or beta < 0.0 or beta > 1.0:
+            raise ValueError('Skewness of volatility surface must be float between 0 and 1.')
 
         self.beta = beta
 
-    def simulate(self, n=10000, path=False, pack=None):
+    def simulate(self, n=10000, pack=False):
 
         """ ds = [r * s] * dt + [sigma * s ** beta] * dW """
 
-        return super()._simulate(path, (n, False, lambda x: self.r * x, lambda x, y: self.sigma * x ** self.beta),
-                                 pack)
+        return super()._simulate((n, False, lambda x: self.r * x, lambda x, y: self.sigma * x ** self.beta), pack)
 
     def pde(self, ht, hs, pack, mul=2.0, grid='CN'):
 
@@ -518,11 +549,14 @@ class CEV(Stochastic):
                 price mesh
 
             pack: tuple(str, str, float[, ...])
+                parameters for option pricing
 
                 option: str
                     option type selected from {'call', 'put', 'call-spread', 'put-spread'}
+
                 exercise: str
                     exercise type selected from {'European', 'American'}
+
                 strikes: float
 
             mul: positive float
@@ -540,10 +574,10 @@ class CEV(Stochastic):
         """
 
         if not isinstance(ht, float) or ht <= 0.0:
-            raise ValueError('Time mesh must be a positive float.')
+            raise ValueError('Time mesh must be positive float.')
 
         if not isinstance(hs, float) or hs <= 0.0:
-            raise ValueError('Price mesh must be a positive float.')
+            raise ValueError('Price mesh must be positive float.')
 
         if not isinstance(mul, float) or mul <= 1.0:
             raise ValueError('Constant multiplier must be float greater than 1.')
@@ -561,10 +595,9 @@ class CEV(Stochastic):
 
         if option in options:
             c = options[option](hs * np.array(range(1, m)), *strikes)
+            d = c.copy()
         else:
-            raise ValueError('Not defined. Option type must be selected from {}.')
-
-        d = c.copy()
+            raise ValueError('Option type must be selected from {}.')
 
         def lower(x):
             return (self.sigma ** 2 * x ** (2 * self.beta) * hs ** (2 * self.beta - 2) - self.r * x) * ht / 2
@@ -618,6 +651,27 @@ class CEV(Stochastic):
 
     def calibrate(self, tm, km, cm, pm):
 
+        """
+            Parameters
+            ----------
+
+            tm: np.array
+                market expiry
+
+            km: np.array
+                market strike
+
+            cm: np.array
+                market call option price
+
+            pm: np.array
+                market put option price
+
+            Return
+            ------
+            None, update instance parameters
+        """
+
         parameters = np.array([self.sigma, self.beta])
 
         def obj(x):
@@ -634,9 +688,7 @@ class CEV(Stochastic):
             return err
 
         bd = ((0, None), (0, 1))
-        sol = minimize(obj, parameters, bounds=bd)
-
-        return sol.x
+        minimize(obj, parameters, bounds=bd)
 
 
 class Bachelier(CEV):
@@ -656,10 +708,10 @@ class BlackScholes(CEV):
 
         CEV.__init__(self, s, r, sigma, t, 1.0, q)
 
-    def european_option_formula(self, k, option, output):
+    def european_vanilla_formula(self, k, option, output):
 
         """
-            Closed-form solutions for price or Greek of European options
+            Closed-form solutions for price or Greek of European vanilla options
 
             Parameters
             ----------
@@ -667,14 +719,14 @@ class BlackScholes(CEV):
                 strike
 
             option: str
-                option 'call' or 'put'
+                option type selected from {'call', 'put'}
 
             output: str
                 desired output type selected from {'price', 'delta', 'gamma', 'vega', 'theta', 'rho'}
 
             Return
             ------
-            ans: float
+            x: float
                 desired price or Greek
         """
 
@@ -697,6 +749,70 @@ class BlackScholes(CEV):
 
         return formula[f'{option}-{output}']
 
+    def european_barrier_option_formula(self, k, barrier, rebate, option):
+
+        """
+            (in development, results may be incorrect)
+
+            Closed-form formula for price of European barrier options
+
+            Parameters
+            ----------
+            k: float
+                strike
+
+            barrier: float
+
+            rebate: float
+
+            option: str
+                option type selected from {'up', 'down'}-{'in', 'out'}-{'call', 'put'}
+
+            Return
+            ------
+            x: float
+                desired price
+        """
+
+        ud, io, cp = option.split('-')
+        phi = 1 if io == 'out' else -1
+        eta = 1 if cp == 'call' else -1
+        mu = (self.r - self.sigma ** 2 / 2) / self.sigma ** 2
+        lbd = np.sqrt(mu ** 2 + 2 * self.r / self.sigma ** 2)
+        z = np.log(barrier / self.s) / (self.sigma * np.sqrt(self.t)) + lbd * self.sigma * np.sqrt(self.t)
+
+        def func(x):
+            return np.log(x) / (self.sigma * np.sqrt(self.t)) + (1 + mu) * self.sigma * np.sqrt(self.t)
+
+        p = {'ab': lambda x: phi * self.s * norm.cdf(phi * func(x)) - phi * k * np.exp(-self.r * self.t) * norm.cdf(
+                             phi * func(x) - phi * self.sigma * np.sqrt(self.t)),
+             'cd': lambda y: phi * self.s * (barrier / self.s) ** (2 * mu + 2) * norm.cdf(
+                 eta * func(y)) - phi * k * np.exp(-self.r * self.t) * (barrier / self.s) ** (2 * mu) * norm.cdf(
+                 eta * func(y) - eta * self.sigma * np.sqrt(self.t)),
+             'e': lambda x, y: rebate * np.exp(-self.r * self.t) * (
+                     norm.cdf(eta * func(x) - eta * self.sigma * np.sqrt(self.t)) - (barrier / self.s) ** (
+                         2 * mu) * norm.cdf(eta * func(y) - eta * self.sigma * np.sqrt(self.t))),
+             'f': rebate * (barrier / self.s) ** (mu + lbd) * norm.cdf(eta * z) + (barrier / self.s) ** (
+                         mu - lbd) * norm.cdf(eta * z - 2 * eta * lbd * self.sigma * np.sqrt(self.t))}
+
+        a = p['ab'](self.s / k)
+        b = p['ab'](self.s / barrier)
+        c = p['cd'](barrier ** 2 * k / self.s)
+        d = p['cd'](barrier / self.s)
+
+        if io == 'in':
+            e = p['e'](self.s / barrier, barrier / self.s)
+            prices = {'down-call': c + e if k > barrier else a - b + d + e,
+                      'down-put': b - c + d + e if k > barrier else a + e}
+        else:
+            f = p['f']
+            prices = {'down-call': a - c + f if k > barrier else b - d + f,
+                      'down-put': a - b + c - d + f if k > barrier else f,
+                      'up-call': f if k > barrier else a - b + c - d + f,
+                      'up-put': b - d + f if k > barrier else a - c + f}
+
+        return prices[f'{ud}-{cp}']
+
 
 class Heston(Stochastic):
 
@@ -718,13 +834,29 @@ class Heston(Stochastic):
         """
 
         Stochastic.__init__(self, s, r, sigma, t, q)
+
+        if not isinstance(kappa, float):
+            raise ValueError('Speed of mean reversion must be float.')
+
+        if not isinstance(theta, float):
+            raise ValueError('Level of mean reversion must be float.')
+
+        if not isinstance(xi, float) or xi < 0.0:
+            raise ValueError('Skewness must be non-negative float.')
+
+        if not isinstance(rho, float) or rho < -1.0 or rho > 1.0:
+            raise ValueError('Correlation must be float between -1 and 1.')
+
+        if not isinstance(alpha, float):
+            raise ValueError('Damping factor must be float.')
+
         self.kappa = kappa
         self.theta = theta
         self.xi = xi
         self.rho = rho
         self.alpha = alpha
 
-    def simulate(self, n=100, path=False, cutoff='truncate', pack=None):
+    def simulate(self, n=100, pack=False, cutoff='truncate'):
 
         """
             ds = [r * s] * dt + [sqrt(sigma) * s] * dW_1
@@ -732,7 +864,7 @@ class Heston(Stochastic):
             Cov(dW_1, dW_2) = rho * dt
         """
 
-        return super()._simulate(path, (n, False, lambda s: self.r * s, lambda s, sigma: _modify(sigma, cutoff) * s,
+        return super()._simulate((n, False, lambda s: self.r * s, lambda s, sigma: _modify(sigma, cutoff) * s,
                                  True, lambda sigma: self.kappa * (self.theta - sigma),
                                  lambda sigma: self.xi * np.sqrt(_modify(sigma, cutoff)), self.rho), pack)
 
@@ -814,9 +946,6 @@ class Heston(Stochastic):
 
             Parameters
             ----------
-            n: int
-                length of the payoffs (or the strikes)
-
             tm: np.array
                 market expiry
 
@@ -875,11 +1004,21 @@ class SABR(Stochastic):
         """
 
         super().__init__(s, r, sigma, t, q)
+
+        if not isinstance(alpha, float):
+            raise ValueError('Growth rate of volatility must be float.')
+
+        if not isinstance(beta, float) or beta < 0.0 or beta > 1.0:
+            raise ValueError('Skewness of volatility surface must be float between 0 and 1.')
+
+        if not isinstance(rho, float) or rho < -1.0 or rho > 1.0:
+            raise ValueError('Correlation must be float between -1 and 1.')
+
         self.alpha = alpha
         self.beta = beta
         self.rho = rho
 
-    def simulate(self, n=100, path=False, cutoff='truncate', pack=None):
+    def simulate(self, n=100, pack=False, cutoff='truncate'):
 
         """
             ds = [r * s] * dt + [sigma * s ** beta] * dW_1
@@ -887,9 +1026,8 @@ class SABR(Stochastic):
             Cov(dW_1, dW_2) = rho * dt
         """
 
-        return super()._simulate(path, (n, False, lambda s: self.r * s, lambda s, sigma: sigma * s ** self.beta,
-                                 True, lambda sigma: 0, lambda sigma: self.alpha * _modify(sigma, cutoff),
-                                 self.rho), pack)
+        return super()._simulate((n, False, lambda s: self.r * s, lambda s, sigma: sigma * s ** self.beta, True,
+                                  lambda sigma: 0, lambda sigma: self.alpha * _modify(sigma, cutoff), self.rho), pack)
 
     def calibrate(self, n, sigma_m, km):
 
