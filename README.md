@@ -5,6 +5,7 @@
 [![scipy_ver](https://img.shields.io/badge/scipy-1.3-brightgreen.svg)](https://docs.scipy.org/doc/)
 
 ![](https://d2u3kfwd92fzu7.cloudfront.net/gallery/photo/1435767799678/CT_Stochastic14_detail2_2014_Courtesy%20of%20Campoli%20Presti.jpg)
+
 ## Option Types
 
 * Call
@@ -14,18 +15,22 @@
 * Call Binary
 * Put Binary
 
+## Style Types
+
+* European
+* American
+* Bermudan
+
 ## Exercise Types
 
 * Vanilla
-  - European
-  - American
 * Exotic - Single Asset
   - Asian fixed
   * Asian float
   * Lookback fixed
   * Lookback float
   * Barrier
-* Exotic - Multiple Assets
+* Exotic - Multiple Assets (in development)
   * Basket min
   * Basket max
   * Atlas
@@ -49,7 +54,8 @@
   - Calibration
   - Bachelier / Normal Price Distribution
   - Black-Scholes / Log-Normal Price Distribution
-    + Closed Form Formula for Price and Greeks
+    + Closed Form Formula for Price and Greeks of European option
+    + Closed Form Formula for Price of Barrier option (in development)
 * (2D / Stock Price) Heston
   - Calibration
 * (2D / Stock Price) Stochastic-Alpha-Beta-Rho / SABR
