@@ -339,11 +339,6 @@ class Stochastic:
 
             n = setting[0]
 
-            """
-            permits = np.empty()
-            if style == 'Bermudan':
-                permits = n - moments * n
-            """
 
             if _float:
                 def backward(p, i):

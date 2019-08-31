@@ -1,6 +1,6 @@
 # Author: Yunfei Luo
-# Date: Aug 7, 2019
-# Version: 0.11.3 (in development)
+# Date: Aug 27, 2019
+# Version: 0.11.4 (in development)
 
 
 from collections import deque
@@ -30,7 +30,7 @@ def estimate(df, mean_est='equal_weights', cov_est='equal_weights', alpha=1e-10)
 
         mean_est: str
             method to estimate mean
-            selected from {'equal_weights', 'exponential_weights'}
+            selected from {'equal_weights', 'exponential_weights', 'linear-weights', 'FRAMA'}
 
         cov_est: str
             method to estimate covariance
@@ -56,6 +56,21 @@ def estimate(df, mean_est='equal_weights', cov_est='equal_weights', alpha=1e-10)
         mean = df.mean().values
     elif mean_est == 'exponential_weights':
         mean = df.ewm(alpha=alpha).mean().iloc[-1].values
+    elif mean_est == 'linear-weights':
+        weights = np.array(range(1, df.shape[0] + 1))
+        mean = df.values.T @ weights / sum(weights)
+    elif mean_est == 'FRAMA':
+        mean = np.empty(df.shape[1])
+
+        def n(d):
+            return (d.max() - d.min()) / len(d)
+
+        for i in range(df.shape[1]):
+            data = df.iloc[:, i].values
+            mean[i] = df.iloc[:, i].ewm(alpha=np.exp(-4.669201609 * (
+                        np.log((n(data[:len(data) // 2]) + n(data[len(data) // 2:])) / n(data)) / np.log(
+                    2) - 1))).mean().iloc[-1]
+        print(mean)
     else:
         raise ValueError('Method does not exist.')
 
@@ -83,8 +98,7 @@ class Markowitz:
         Find the optimal portfolio to maximize return and to minimize variance
     """
 
-    def __init__(self, cov_mat, exp_ret, idx, target=None, rf=None,
-                 bounds=None, mkt_neutral=False, gamma=0.0, tol=1e-30):
+    def __init__(self, cov_mat, exp_ret, rf=None, bounds=None, mkt_neutral=False, gamma=0.0, tol=1e-30):
 
         """
             Parameters
@@ -94,16 +108,6 @@ class Markowitz:
 
             exp_ret : np.array
                 n-length array of expected (excess) returns of risky assets
-
-            idx: int from {-2, -1, 1, 2}
-                desired type of portfolio
-                    -2: Global Minimum Variance (GMV)
-                    -1: Maximum Sharpe Ratio (MSR)
-                     1: Optimized given expected (excess) portfolio return
-                     2: Optimized given expected portfolio variance
-
-            target: positive float or None in default, required if idx is 1 or 2
-                target return if idx is 1, target variance if idx is 2
 
             rf: positive float or None in default, optional
                 expected return for the risk-free asset (if applicable)
@@ -130,12 +134,6 @@ class Markowitz:
         if not isinstance(exp_ret, np.ndarray) or len(exp_ret.shape) != 1 or len(exp_ret) != cov_mat.shape[0]:
             raise ValueError('Expected return must be array with same length as size of covariance matrix.')
 
-        if idx not in {-2, -1, 1, 2}:
-            raise ValueError('Indicator must be -2, -1, 1 or 2.')
-
-        if idx in {1, 2} and not isinstance(target, float):
-            raise ValueError('Target return or variance must be positive float.')
-
         if rf is not None and not isinstance(rf, float):
             raise ValueError('Risk-free rate must be None or a positive float.')
 
@@ -149,11 +147,9 @@ class Markowitz:
             raise ValueError('Tolerance must be a positive float.')
 
         self.n = len(exp_ret)
-
         self.cov_mat = cov_mat
         self.rf = rf
         self.exp_ret = exp_ret - rf if rf else exp_ret
-        self.idx = idx
         self.bounds = (bounds[0],) * self.n if bounds and len(bounds) == 1 else bounds
 
         if bounds or mkt_neutral:
@@ -164,11 +160,6 @@ class Markowitz:
         self.mkt_neutral = mkt_neutral
         self.tol = tol
         self.gamma = gamma
-
-        if idx == 1:
-            self.target = max(target - rf if rf else target, self._gmv() @ exp_ret)
-        elif idx == 2:
-            self.target = max(target, self._gmv() @ cov_mat @ self._gmv())
 
         # save weights for performance analysis
         self.weights = None
@@ -226,7 +217,7 @@ class Markowitz:
 
         return self.weights
 
-    def _optimize_return(self):
+    def _optimize_return(self, target):
 
         """
             Optimal portfolio given the expected portfolio return
@@ -238,7 +229,7 @@ class Markowitz:
 
         if self.bounds or self.mkt_neutral:
 
-            cons = [{'type': 'eq', 'fun': lambda x: x @ self.exp_ret - self.target}]
+            cons = [{'type': 'eq', 'fun': lambda x: x @ self.exp_ret - target}]
             if self.rf is None:
                 cons.append(self.constraint)
             self.weights = minimize(self._obj1, self.x0, bounds=self.bounds,
@@ -246,15 +237,15 @@ class Markowitz:
 
         else:
 
-            # one-asset / two-asset theorems
+            # one-fund / two-fund theorems
             gmv = np.zeros(self.n) if self.rf else self._gmv()
             msr = self._msr()
-            a = (self.target - self.exp_ret @ gmv) / (self.exp_ret @ (msr - gmv))
+            a = (target - self.exp_ret @ gmv) / (self.exp_ret @ (msr - gmv))
             self.weights = a * msr + (1 - a) * gmv
 
         return self.weights
 
-    def _optimize_risk(self):
+    def _optimize_risk(self, target):
 
         """
             Optimal portfolio given the expected portfolio variance
@@ -264,7 +255,7 @@ class Markowitz:
             weights: np.array, n-length
         """
 
-        cons = [{'type': 'eq', 'fun': lambda x: x @ self.cov_mat @ x - self.target}]
+        cons = [{'type': 'eq', 'fun': lambda x: x @ self.cov_mat @ x - target}]
         if self.rf is None:
             cons.append(self.constraint)
         self.weights = minimize(self._obj2, self.x0, bounds=self.bounds,
@@ -272,21 +263,49 @@ class Markowitz:
 
         return self.weights
 
-    def allocate(self, idx, target=None):
+    def allocate(self, fund, target=None):
 
-        """ User API, return desired optimized weights given indicator """
+        """
+            User API, return desired optimized weights given indicator
 
-        i = idx if idx else self.idx
-        if i == -2:
+            Parameters
+            ----------
+            fund: str from {'GMV', 'MSR', 'opt-ret', 'opt-risk'}
+                desired type of portfolio
+                    GMV: Global minimum variance
+                    MSR: Maximum sharpe ratio
+                    opt-ret: Optimized portfolio given expected (excess) portfolio return
+                    opt-risk: Optimized portfolio given expected portfolio variance
+
+            target: positive float or None in default, required if fund is 'opt-ret' or 'opt-risk'
+                target return if 'opt-ret', target variance if 'opt-risk'
+
+            Return
+            ------
+            weights: np.array, n-length
+        """
+
+        if fund == 'GMV':
             return self._gmv()
-        elif i == -1:
+        elif fund == 'MSR':
             return self._msr()
-        elif i == 1:
-            self.target = target
-            return self._optimize_return()
+        elif fund == 'opt-ret':
+            if not isinstance(target, float):
+                raise ValueError('Target return must be float.')
+
+            # excess return if risk-free asset included
+            # expected return is bounded below by return given global minimum variance
+            target = max(target - self.rf if self.rf else target, self._gmv() @ self.exp_ret)
+            return self._optimize_return(target)
+        elif fund == 'opt-risk':
+            if not isinstance(target, float) or target < 0:
+                raise ValueError('Target return must be non-negative float.')
+
+            # expected variance is bounded below by global minimum variance
+            target = max(target, self._gmv() @ self.cov_mat @ self._gmv())
+            return self._optimize_risk(target)
         else:
-            self.target = target
-            return self._optimize_risk()
+            raise ValueError('Asset allocation method does not exist.')
 
     def efficient_frontier(self, n_sim=10000):
 
@@ -317,14 +336,6 @@ class Markowitz:
         plt.scatter(gmv_vol, gmv_ret, c='orangered', s=50)
         plt.show()
 
-    def _portfolio_return(self):
-
-        return self.weights @ self.exp_ret
-
-    def _portfolio_variance(self):
-
-        return self.weights @ self.cov_mat @ self.weights
-
     def performance(self):
 
         """ User API, print performance analysis """
@@ -332,12 +343,12 @@ class Markowitz:
         if self.weights is None:
             raise TypeError('Weights are not calculated yet.')
 
-        port_ret = self._portfolio_return()
+        port_ret = self.weights @ self.exp_ret
         port_var = self.weights @ self.cov_mat @ self.weights
 
         print('Optimized weights:   ', self.weights)
-        print('Expected Return:     ', )
-        print('Portfolio Variance:  ', self._portfolio_variance())
+        print('Expected Return:     ', port_ret)
+        print('Portfolio Variance:  ', port_var)
         print('Sharpe Ratio:        ', port_ret / port_var)
 
 

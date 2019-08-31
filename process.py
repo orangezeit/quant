@@ -268,8 +268,8 @@ def portfolio_active(rates, stocks, benchmark, indices, label='SPY', empty=False
     if empty:
         benchmark[f'{label}_mean'] = benchmark[f'{label}'].rolling(21).mean()
 
-    #(-2, None),
-    for r, bound in ((-2, (0, np.inf)), (-1, (0, np.inf)), (-3, None), (-4, None), (-5, None)):
+    #
+    for r, bound in ((-2, None), (-2, (0, np.inf)), (-1, (0, np.inf)), (-3, None), (-4, None), (-5, None)):
 
         ts = []
         shares = cash * long_ratio / stocks.shape[1] / stocks.iloc[0].values // 1
@@ -283,7 +283,9 @@ def portfolio_active(rates, stocks, benchmark, indices, label='SPY', empty=False
                 vr, sigma = portfolio.estimate(rates[day - 21:day])
 
                 if bound:
-                    weights = portfolio.Markowitz(sigma, vr, r, bounds=(bound,)).allocate(r)
+                    lab = 'GMV' if r == -2 else 'MSR'
+
+                    weights = portfolio.Markowitz(sigma, vr, bounds=(bound,)).allocate(lab)
                 else:
                     if r == -3:
                         weights = portfolio.RiskParity(rates[day - 21:day]).ivp()
@@ -292,7 +294,8 @@ def portfolio_active(rates, stocks, benchmark, indices, label='SPY', empty=False
                     elif r == -5:
                         weights = portfolio.RiskParity(rates[day - 21:day]).trp()
                     else:
-                        weights = portfolio.Markowitz(sigma, vr, r).allocate()
+                        lab = 'GMV' if r == -2 else 'MSR'
+                        weights = portfolio.Markowitz(sigma, vr).allocate(lab)
 
             # print(day)
             short_signal = benchmark.iloc[day, 0] < benchmark.iloc[day, 1] if day >= 20 and empty else False
@@ -315,7 +318,7 @@ def portfolio_active(rates, stocks, benchmark, indices, label='SPY', empty=False
                 else:
 
                     # recalculate total value, reallocate assets and calculate new leftover
-                    total = shares @ prices + leftover
+                    total = (shares @ prices + leftover) - 10 * sum(shares) * 0.01 * np.random.choice([-1, 1])
                     temp = total * long_ratio * weights / prices // 1
                     leftover = total - temp @ prices - abs(shares - temp) @ prices * 0.0001
 
@@ -329,9 +332,9 @@ def portfolio_active(rates, stocks, benchmark, indices, label='SPY', empty=False
         plt.plot(ts)
         backtest_stat(ts)
 
-    labels = [label, 'EW', 'GMV + Long Only', 'MSR + Long Only', 'IVP', 'HRP', 'TRP']
+    labels = [label, 'EW', 'GMV', 'GMV + Long Only', 'MSR + Long Only', 'IVP', 'HRP', 'TRP']
     plt.legend(labels)
-    plt.title('From Day {:d} to Day {:d} {} Hedging'.format(*indices, 'With' if empty else 'Without'))
+    plt.title('From Day {:d} to Day {:d} {} Option Hedging'.format(*indices, 'With' if empty else 'With'))
     plt.show()
 
 
@@ -357,7 +360,7 @@ if __name__ == '__main__':
 
     idxs = (0, 3028)
 
-    # portfolio_passive(stks.copy(), bm.copy())
-    portfolio_active(rs, stks, bm, idxs, mark, True, extra=z)
+    portfolio_passive(stks.copy(), bm.copy())
+    portfolio_active(rs, stks, bm, idxs, mark)
 
 
