@@ -1,10 +1,8 @@
 # Stochastic Processes and Option Pricing
 
-[![python_ver](https://img.shields.io/badge/python-3.6-brightgreen.svg)](https://www.python.org/)
+[![python_ver](https://img.shields.io/badge/python-3.8-brightgreen.svg)](https://www.python.org/)
 [![numpy_ver](https://img.shields.io/badge/numpy-1.17-brightgreen.svg)](https://docs.scipy.org/doc/)
-[![scipy_ver](https://img.shields.io/badge/scipy-1.3-brightgreen.svg)](https://docs.scipy.org/doc/)
-
-![](https://d2u3kfwd92fzu7.cloudfront.net/gallery/photo/1435767799678/CT_Stochastic14_detail2_2014_Courtesy%20of%20Campoli%20Presti.jpg)
+[![scipy_ver](https://img.shields.io/badge/scipy-1.4.1-brightgreen.svg)](https://docs.scipy.org/doc/)
 
 ## Option Types
 
@@ -43,6 +41,8 @@
 
 * Geneator / Modifier
 * Monte-Carlo
+  - Weiner Process (Brownian Motion)
+  - Jump-Diffusion
 * Simulation and Option Pricing
 
 ### (Specific) Stochastic
@@ -61,17 +61,14 @@
 * (2D / Stock Price) Stochastic-Alpha-Beta-Rho / SABR
   - Calibration
   
-# Portfolio
+# Portfolio Management and Optimization
 
-Portfolio Management and Optimization
-
-## Dependency
-
-* numpy
-* pandas
-* matplotlib
-* scipy
-* sklearn
+[![python_ver](https://img.shields.io/badge/python-3.8-brightgreen.svg)](https://www.python.org/)
+[![numpy_ver](https://img.shields.io/badge/numpy-1.17-brightgreen.svg)](https://docs.scipy.org/doc/)
+[![scipy_ver](https://img.shields.io/badge/scipy-1.4.1-brightgreen.svg)](https://docs.scipy.org/doc/)
+[![pandas_ver](https://img.shields.io/badge/pandas-1.0.1-brightgreen.svg)](https://pandas.pydata.org/)
+[![matplotlib_ver](https://img.shields.io/badge/matplotlib-3.2.1-brightgreen.svg)](https://matplotlib.org/)
+[![sklearn_ver](https://img.shields.io/badge/sklearn-0.22.2-brightgreen.svg)](https://scikit-learn.org/stable/)
 
 ## Estimation of Means and Covariances
 
