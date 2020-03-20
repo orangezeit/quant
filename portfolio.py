@@ -1,6 +1,6 @@
 # Author: Yunfei Luo
-# Date: Aug 27, 2019
-# Version: 0.11.4 (in development)
+# Date: Mar 19, 2020
+# Version: 0.11.4
 
 
 from collections import deque
@@ -30,14 +30,14 @@ def estimate(df, mean_est='equal_weights', cov_est='equal_weights', alpha=1e-10)
 
         mean_est: str
             method to estimate mean
-            selected from {'equal_weights', 'exponential_weights', 'linear-weights', 'FRAMA'}
+            selected from {'equal_weights', 'exponential_weights', 'linear-weights'}
 
         cov_est: str
             method to estimate covariance
             selected from {'equal_weights', 'exponential_weights', 'ledoit_wolf', 'oas'}
 
         alpha: float, required if exponential_weights selected
-            0 < alpha <= 1, larger alpha means more weights on near
+            [0, 1], larger alpha means more weights on near
             exponential_weights -> equal_weights if alpha -> 0
 
         Return
@@ -59,18 +59,6 @@ def estimate(df, mean_est='equal_weights', cov_est='equal_weights', alpha=1e-10)
     elif mean_est == 'linear-weights':
         weights = np.array(range(1, df.shape[0] + 1))
         mean = df.values.T @ weights / sum(weights)
-    elif mean_est == 'FRAMA':
-        mean = np.empty(df.shape[1])
-
-        def n(d):
-            return (d.max() - d.min()) / len(d)
-
-        for i in range(df.shape[1]):
-            data = df.iloc[:, i].values
-            mean[i] = df.iloc[:, i].ewm(alpha=np.exp(-4.669201609 * (
-                        np.log((n(data[:len(data) // 2]) + n(data[len(data) // 2:])) / n(data)) / np.log(
-                    2) - 1))).mean().iloc[-1]
-        print(mean)
     else:
         raise ValueError('Method does not exist.')
 

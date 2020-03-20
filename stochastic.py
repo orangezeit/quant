@@ -1,6 +1,6 @@
 # Author: Yunfei Luo
-# Date: Aug 31, 2019
-# Version: 0.3.3 (in development)
+# Date: Mar 19, 2020
+# Version: 0.4.2
 
 
 from functools import reduce
@@ -27,16 +27,19 @@ def basket_option(basket, paths, pack):
         Parameters
         ----------
         basket: str
-            basket type selected from {'min', 'max', 'atlas', 'everest', 'himalayan'}
+            basket type selected from {'min', 'max'}
+            {'atlas', 'everest', 'himalayan'} are in development
 
         paths: np.array
+            (# of assets) (# of simulations) (# of points)
             simulation paths of assets
 
         pack: tuple(str, str, float[, ...], int
             parameters for option pricing
 
             based: str
-                based exercise type selected from {'European', 'American'}
+                based exercise type selected from {'European'}
+                'American' is in development
 
             option: str
                 option type selected from {'call', 'put', 'call-spread', 'put-spread', 'call-binary', 'put-binary'}
@@ -53,36 +56,39 @@ def basket_option(basket, paths, pack):
     """
 
     if basket == 'min':
-        fun = np.maximum
+        fn = np.maximum
     elif basket == 'max':
-        fun = np.minimum
+        fn = np.minimum
     elif basket in ('atlas', 'everest', 'himalayan'):
-        fun = None
+        raise ValueError('In development.')
     else:
         raise ValueError('Method does not exist.')
 
     based, option, *strikes, times = pack
 
     if based == 'European':
-        return np.array([options[option](reduce(fun, paths[:, i, :])[-1], *strikes) for i in range(times)]).mean()
+        return np.array([options[option](reduce(fn, paths[:, i, :])[-1], *strikes) for i in range(times)]).mean()
     else:
-        pass
+        raise ValueError('In development.')
 
 
-def _generate(mu, v, dt, z, grid='Euler', dv=0.0):
+def _generate(mu, v, dt, z, j=0.0, grid='Euler', dv=0.0):
 
     """
         Generate simulation
 
         General stochastic process can be written as
 
-            dx = mu(x, t) * dt + v(x, t) * dW
+            dx = mu(x, t) * dt + v(x, t) * dW + j(x, t) * dN
 
         where
 
             x is object of process
             mu(x, t) is drift
             v(x, t) is volatility
+            W is Weiner process
+            j(x, t) is jump
+            N is Poisson process
 
         Parameters
         ----------
@@ -96,6 +102,9 @@ def _generate(mu, v, dt, z, grid='Euler', dv=0.0):
             time mesh
 
         z: float
+            random generated from (possibly correlated) standard normal distribution
+
+        j: float, 0.0 in default, optional
             random generated from (possibly correlated) standard normal distribution
 
         grid: str, 'Euler' in default, optional
@@ -118,9 +127,9 @@ def _generate(mu, v, dt, z, grid='Euler', dv=0.0):
     """
 
     if grid == 'Euler':
-        return mu * dt + v * np.sqrt(dt) * z
+        return mu * dt + v * np.sqrt(dt) * z + j
     elif grid == 'Milstein':
-        return mu * dt + v * np.sqrt(dt) * z + v * dv * dt * (z * z - 1) / 2
+        return mu * dt + v * np.sqrt(dt) * z + v * dv * dt * (z * z - 1) / 2 + j
     else:
         raise ValueError('Method does not exist.')
 
@@ -128,7 +137,7 @@ def _generate(mu, v, dt, z, grid='Euler', dv=0.0):
 def _modify(v, cutoff):
 
     """
-        Modify volatility if negative during simulation
+        Modify volatility if negative volatility occurs during simulation
 
         Parameters
         ----------
@@ -205,14 +214,16 @@ class Stochastic:
         self.sigma = sigma
         self.t = t
 
-    def monte_carlo(self, path, n, rate, delta_x, delta_w1, sv=False, delta_sigma=None, delta_w2=None, rho=0.0):
+    def monte_carlo(self, path, n, rate, delta_x, delta_w1, sv=False, delta_sigma=None, delta_w2=None, rho=0.0,
+                    jump=False, delta_j1=None, delta_j2=None, rho_j=0.0):
 
         """
             Monte Carlo simulation process can be written as
 
-                dx = delta_x * dt + delta_w1 * dW_1
-                d(sigma) = delta_sigma * dt + delta_w2 * dW_2
+                dx = delta_x * dt + delta_w1 * dW_1 + delta_n1 * dN_1
+                d(sigma) = delta_sigma * dt + delta_w2 * dW_2 + delta_n2 * dN_2
                 Cov(dW_1, dW_2) = rho
+                Cov(dN_1, dN_2) = rho_j
 
             Parameters
             ----------
@@ -241,7 +252,19 @@ class Stochastic:
                 to describe how second Brownian motion varies
 
             rho: float, 0.0 in default
-                correlation of two Brownian motions
+                [-1, 1], correlation of two Brownian motions
+
+            jump: bool, False in default
+                whether there are jumps
+
+            delta_j1: function, None in default
+                to describe how object jumps
+
+            delta_j2: function, None in default
+                to describe how volatility jumps
+
+            rho_j: float, 0.0 in default
+                [-1, 1], correlation of two jumps
 
             Return
             ------
@@ -260,13 +283,18 @@ class Stochastic:
         else:
             z1, z2 = np.random.normal(size=n), None
 
-        record = np.empty(n + 1)
-        record.fill(x)
+        if jump:
+            j1, j2 = np.random.multivariate_normal([0, 0], [[1, rho_j], [rho_j, 1]], n).T * [delta_j1(), delta_j2()]
+        else:
+            j1, j2 = np.zeros(n), np.zeros(n)
+
+        record = np.zeros(n + 1)
+        record[0] = x
 
         for i in range(n):
-            record[i+1] = record[i] + _generate(delta_x(record[i]), delta_w1(record[i], sigma), self.t / n, z1[i])
+            record[i+1] = record[i] + _generate(delta_x(record[i]), delta_w1(record[i], sigma), self.t / n, z1[i], j1[i])
             if sv:
-                sigma += _generate(delta_sigma(sigma), delta_w2(sigma), self.t / n, z2[i])
+                sigma += _generate(delta_sigma(sigma), delta_w2(sigma), self.t / n, z2[i], j2[i])
 
         return record if path else record[-1]
 
@@ -335,18 +363,22 @@ class Stochastic:
         if not isinstance(times, int) or times <= 0:
             raise ValueError('Number of simulations must be positive int.')
 
-        def early_exercise(mc, fn, style, moments, _float=False):
+        def early_exercise(mc, fn, _float=False):  # not correct
 
             n = setting[0]
 
+            if style == 'Bermudan':
+                specified = (n - n * moments).astype(int)
 
             if _float:
                 def backward(p, i):
-                    return max(options[option](mc[i], fn(mc, i)), p * np.exp(-self.r * self.t / n))
+                    return max(options[option](mc[i], fn(mc, i)), p * np.exp(-self.r * self.t / n)) \
+                        if style == 'American' or i in specified else p * np.exp(-self.r * self.t / n)
                 return reduce(backward, range(1, n), options[option](mc[0], fn(mc, 0)))
             else:
                 def backward(p, i):
-                    return max(options[option](fn(mc, i), *strikes), p * np.exp(-self.r * self.t / n))
+                    return max(options[option](fn(mc, i), *strikes), p * np.exp(-self.r * self.t / n)) \
+                        if style == 'American' or i in specified else p * np.exp(-self.r * self.t / n)
                 return reduce(backward, range(1, n), options[option](fn(mc, 0), *strikes))
 
         if option in options:
@@ -367,13 +399,15 @@ class Stochastic:
                 if style == 'European':
 
                     def cutoff(key, mc):
-                        return options[option](mc[-1], *strikes) if acts[key](mc) else rebate
+                        return np.exp(-self.r * self.t) * options[option](mc[-1], *strikes) if acts[key](mc) else rebate
 
                 elif style == 'American' or style == 'Bermudan':
 
                     def cutoff(key, mc):
-                        return early_exercise(mc, lambda x, i: x[i], style, moments) if acts[key](mc) else rebate
+                        return early_exercise(mc, lambda x, i: x[i]) if acts[key](mc) else rebate
+
                 else:
+
                     raise ValueError('Style type doest not exist.')
 
                 return np.fromiter((cutoff(act, self.monte_carlo(True, *setting)) for _ in range(times)),
@@ -386,32 +420,34 @@ class Stochastic:
 
                 if exercise == 'vanilla':
 
-                    return np.fromiter((options[option](self.monte_carlo(False, *setting), *strikes)
-                                        for _ in range(times)), dtype=np.float).mean()
+                    p = np.fromiter((options[option](self.monte_carlo(False, *setting), *strikes)
+                                     for _ in range(times)), dtype=np.float).mean()
 
                 elif exercise == 'Asian-fixed':
 
-                    return np.fromiter((options[option](self.monte_carlo(True, *setting).mean(), *strikes)
-                                        for _ in range(times)), dtype=np.float).mean()
+                    p = np.fromiter((options[option](self.monte_carlo(True, *setting).mean(), *strikes)
+                                     for _ in range(times)), dtype=np.float).mean()
 
                 elif exercise == 'Asian-float':
 
-                    return np.fromiter((options[option](*fns['float'](lambda x: x.mean(), self.monte_carlo(True, *setting)))
-                                        for _ in range(times)), dtype=np.float).mean()
+                    p = np.fromiter((options[option](*fns['float'](lambda x: x.mean(), self.monte_carlo(True, *setting)))
+                                     for _ in range(times)), dtype=np.float).mean()
 
                 elif exercise == 'lookback-fixed':
 
-                    return np.fromiter((options[option](fns['lookback'](self.monte_carlo(True, *setting)), *strikes)
-                                        for _ in range(times)), dtype=np.float).mean()
+                    p = np.fromiter((options[option](fns['lookback'](self.monte_carlo(True, *setting)), *strikes)
+                                     for _ in range(times)), dtype=np.float).mean()
 
                 elif exercise == 'lookback-float':
 
-                    return np.fromiter((options[option](*fns['float'](fns['lookback'], self.monte_carlo(True, *setting)))
-                                        for _ in range(times)), dtype=np.float).mean()
+                    p = np.fromiter((options[option](*fns['float'](fns['lookback'], self.monte_carlo(True, *setting)))
+                                     for _ in range(times)), dtype=np.float).mean()
 
                 else:
 
                     raise ValueError('Exercise type does not exist.')
+
+                return np.exp(-self.r * self.t) * p
 
             elif style == 'American' or style == 'Bermudan':
 
@@ -421,14 +457,15 @@ class Stochastic:
 
                 exercise, *ff = exercise.split('-')
                 _float = False
+
                 if len(ff):
                     _float = ff[0] == 'float'
-                print(*ff, _float)
+
                 if exercise == 'lookback':
                     exercise = '-'.join((exercise, *ff, option.split('-')[0]))
 
                 return np.fromiter((early_exercise(np.flip(self.monte_carlo(True, *setting)), fns[exercise],
-                                    style, moments, _float) for _ in range(times)), dtype=np.float).mean()
+                                    _float) for _ in range(times)), dtype=np.float).mean()
 
             else:
                 raise ValueError('Style type does not exist.')
@@ -747,7 +784,7 @@ class BlackScholes(CEV):
     def european_barrier_option_formula(self, k, barrier, rebate, option):
 
         """
-            (in development, results may be incorrect)
+            (in development)
 
             Closed-form formula for price of European barrier options
 
@@ -757,8 +794,10 @@ class BlackScholes(CEV):
                 strike
 
             barrier: float
+                price of underlying asset that activates / deactivates the pricing mechanism
 
             rebate: float
+                price to pay if the option is deactivated
 
             option: str
                 option type selected from {'up', 'down'}-{'in', 'out'}-{'call', 'put'}
@@ -798,7 +837,9 @@ class BlackScholes(CEV):
         if io == 'in':
             e = p['e'](self.s / barrier, barrier / self.s)
             prices = {'down-call': c + e if k > barrier else a - b + d + e,
-                      'down-put': b - c + d + e if k > barrier else a + e}
+                      'down-put': b - c + d + e if k > barrier else a + e,
+                      'up-call': a + e if k > barrier else b - c + d + e,
+                      'up-put': a - b + d + e if k > barrier else c + e}
         else:
             f = p['f']
             prices = {'down-call': a - c + f if k > barrier else b - d + f,
@@ -822,7 +863,7 @@ class Heston(Stochastic):
                 skewness
 
             rho: float
-                -1 <= rho <= 1, correlation between two Brownian motions
+                [-1, 1], correlation between two Brownian motions
 
             alpha: float
                 damping factor
@@ -995,7 +1036,7 @@ class SABR(Stochastic):
                 growth rate of the volatility
 
             rho: float
-                -1 <= rho <= 1, correlation between two Brownian motions
+                [-1, 1], correlation between two Brownian motions
         """
 
         super().__init__(s, r, sigma, t, q)

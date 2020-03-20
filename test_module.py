@@ -1,8 +1,8 @@
-# Creator: Yunfei Luo
-# Date: Aug 27, 2019
-# Version: 0.0.1
+# Author: Yunfei Luo
+# Date: Mar 19, 2020
+# Version: 0.0.2
 
-# import cupy as cp
+
 import numpy as np
 import pandas as pd
 import time
@@ -15,11 +15,14 @@ def test_est():
 
     a = np.random.randint(10, 20)
     b = np.random.randint(2 * a, 3 * a)
-    # m1, m2 = ('equal_weights', 'exponential_weights'), (
-    # 'equal_weights', 'exponential_weights', 'ledoit_wolf', 'oas')
+    m1 = ('equal_weights', 'exponential_weights', 'linear-weights')
+    m2 = ('equal_weights', 'exponential_weights', 'ledoit_wolf', 'oas')
     test_set = pd.DataFrame(np.random.normal(size=(b, a)))
-    rs, _ = portfolio.estimate(test_set, 'FRAMA')
-    print(rs)
+    for x in m1:
+        for y in m2:
+            rs = portfolio.estimate(test_set, x, y)
+            print(rs)
+
 
 def test_markowitz(n1=100, n2=1000, n3=1000):
 
@@ -30,8 +33,7 @@ def test_markowitz(n1=100, n2=1000, n3=1000):
         # simulated data set
         a = np.random.randint(10, 20)
         b = np.random.randint(2 * a, 3 * a)
-        # m1, m2 = ('equal_weights', 'exponential_weights'), (
-        # 'equal_weights', 'exponential_weights', 'ledoit_wolf', 'oas')
+
         test_set = pd.DataFrame(np.random.normal(size=(b, a)))
         rs, covs = portfolio.estimate(test_set)
 
@@ -116,23 +118,23 @@ def test_stochastic_simulate_ir(times=10000):
     # ou, cir
     ou = stochastic.OrnsteinUhlenbeck(0.02, 0.05, 1, 0.1, 0.2)
     res1 = np.fromiter((ou.simulate() for _ in range(times)), dtype=np.float).mean()
-    print(res1) # 0.037
+    print(res1)  # 0.037
     print()
     cir = stochastic.CoxIntergellRoss(0.02, 0.05, 1, 0.1, 0.2)
     res = np.fromiter((cir.simulate() for _ in range(times)), dtype=np.float).mean()
-    print(res) # 0.037
+    print(res)   # 0.037
 
 
 def test_stochastic_simulate_stock(model=0):
 
     if model == 0:
-        cev = stochastic.CEV(292.45, 0.0236, 0.12, 84 / 252, 0.99)
+        cev = stochastic.CEV(292.45, 0.0236, 0.12, 84 / 252, 1.0)
     elif model == 1:
         cev = stochastic.CEV(120.0, 0.04, 0.3, 0.5, 1.0)
 
-    options = ['call', 'put']  #, 'call-spread', 'put-spread', 'call-binary', 'put-binary'
-    exercises = ['vanilla']  #  , 'Asian-fixed', 'Asian-float', 'lookback-fixed', 'lookback-float'
-    styles = ['European']  # , 'American'
+    options = ['call', 'put', 'call-spread', 'put-spread', 'call-binary', 'put-binary']  #
+    exercises = ['vanilla']  # 'lookback-fixed', 'lookback-float' 'Asian-fixed', 'Asian-float'
+    styles = ['American']    # 'European'
 
     for option in options:
         for exercise in exercises:
@@ -141,13 +143,13 @@ def test_stochastic_simulate_stock(model=0):
                     continue
                 strikes = (310.0, 315.0)
             else:
-                strikes = (293.0,)   #  (285.0,)
+                strikes = (310.0,)
             for style in styles:
                 res = cev.simulate(n=1000, pack=(option, exercise, style, *strikes, 10000, None, None))
                 print(option, exercise, style, res)
 
 
-def test_cev_pde(case=0):
+def test_cev_pde(case=2):
 
     """ test the special case (BS-Model), check if pde solution converges to formula solution """
 
@@ -161,8 +163,8 @@ def test_cev_pde(case=0):
         k1, k2 = 95.0, 105.0
     elif case == 2:
         t = 84 / 252
-        cev = stochastic.CEV(292.45, 0.0236, 0.12, 84 / 252, 0.99)
-        k1, k2 = 293.0, 315.0
+        cev = stochastic.CEV(292.45, 0.0236, 0.12, 84 / 252, 1.0)
+        k1, k2 = 310.0, 315.0
 
     d = {1: cev.pde(t / 1000, 0.01, ('call', 'European', k1)),
          2: cev.pde(t / 1000, 0.01, ('put', 'European', k1)),
@@ -177,7 +179,8 @@ def test_cev_pde(case=0):
          11: cev.pde(t / 1000, 0.01, ('call-binary', 'American', k1)),
          12: cev.pde(t / 1000, 0.01, ('put-binary', 'American', k1))}
 
-    print(d[1], d[2])
+    for v in d.values():
+        print(v)
     """
     7.68560738555255 11.361290729770904 7.6786823587981825 11.911016320988761
     1.8823261132827405 2.64853753885148 3.108537197878851 4.929993852051919
@@ -185,8 +188,6 @@ def test_cev_pde(case=0):
     19.47436149386628 5.433098144275096 19.474361504654876 5.936348291067235
     5.184298869815485 2.6868106922175428 8.046269671302197 4.801753497973709
     """
-
-
 
 
 def test_bs_formula():
@@ -201,11 +202,11 @@ def test_bs_formula():
     b1 = bs.european_barrier_option_formula(280.0, 300.0, 0.0, 'up-out-call', 'value') # 0.0070
 
     print(c1, c1-c2, p1, p2-p1)
-    print(cb1, b1)
-    # 7.6856073822393824 1.8823250330486587 11.361290726706613 3.0475992361525073
+    print(cb1, b1)  # 7.6856073822393824 1.8823250330486587 11.361290726706613 3.0475992361525073
 
 
 def test_heston_calibrate():
+
     ht = stochastic.Heston(267.15, 0.015, 0.08, 0.7, 0.1, 0.2, -0.4, 0.5, 2.0, 0.0177)
     df = pd.read_csv(r'data\opt-data.csv')
     tm = df['expT'].values
@@ -213,7 +214,7 @@ def test_heston_calibrate():
     cm = (df['call_bid'].values + df['call_ask'].values) / 2
     print(tm, km, cm)
     res = ht.calibrate(tm, km, cm)
-    print(res)  #print(obj([ 0.06110104,  0.52289908,  0.07485918,  2.68277196, -0.55149318]))
+    print(res)  # [ 0.06110104,  0.52289908,  0.07485918,  2.68277196, -0.55149318]
 
 
 def test_cev_calibrate():
@@ -231,16 +232,17 @@ def test_cev_calibrate():
     res = cev.calibrate(tm, km, cm, pm)
     print(res)
 
+
 if __name__ == '__main__':
 
     start = time.time()
+    # test_est()
     # test_markowitz()
     # test_stochastic_simulate_ir()
-    test_stochastic_simulate_stock(0)
-    test_cev_pde(2)
+    # test_stochastic_simulate_stock(0)
+    # test_cev_pde(2)
     # test_bs_formula()
     # test_cev_calibrate()
     # a = cp.exp(1)
 
     print('t', time.time() - start)
-

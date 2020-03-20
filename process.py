@@ -1,5 +1,5 @@
-# Creator: Yunfei Luo
-# Date: Apr 29, 2019  10:07 PM
+# Author: Yunfei Luo
+# Date: Mar 19, 2020
 
 import numpy as np
 import pandas as pd
@@ -8,6 +8,7 @@ import datetime
 
 import stochastic
 import portfolio
+
 
 """
     Import data from csv file
@@ -86,11 +87,6 @@ def generate_sabr_parameters(volume=100):
     pm_df['Date'] = pd.Series(ds)
     pm_df.set_index('Date', inplace=True)
     pm_df.to_csv('parameters_price.csv')
-
-
-def generate_heston_parameters():
-
-    pass
 
 
 def validate_predicted_parameters():
@@ -186,8 +182,8 @@ def no_arbitrage_test(num=16):
 
 def import_data(tickers, label='SPY'):
 
-    stocks = pd.concat([pd.read_csv(f'data\{ticker}.csv', header=0, names=[ticker], usecols=[5]) for ticker in tickers],
-                       1)
+    stocks = pd.concat([pd.read_csv(f'data\{ticker}.csv', header=0, names=[ticker], usecols=[5])
+                        for ticker in tickers], 1)
     benchmark = pd.read_csv(f'data\{label}.csv', header=0, names=[label], usecols=[5 if label == 'SPY' else 1])
 
     # check data integrity
@@ -238,27 +234,17 @@ def portfolio_passive(stocks, benchmark, long_ratio=0.8, cash=100000000.0):
 
 def momentum(rates):
 
-    '''
-    use momentum as a timing factor
-    if the total number of the short signal exceeds that of the long signal, then we should sell all the stocks until the long sigal again passes the short signal
-    '''
     # short_sig > long_sig
     return (rates < 0).rolling(21).sum() > (rates >= 0).rolling(21).sum().values
 
 
 def zscore(rates):
-    '''
-    use zscore as a timing factor
-    if the total number of the short signal exceeds that of the long signal, then we should sell all the stocks until the long sigal again passes the short signal
-    '''
+
     temp = rates - rates.rolling(21).mean() / rates.rolling(21).std()
     return temp < temp.rolling(21).mean()
 
 
 def withdrawal(rates, r=-0.15):
-    '''
-    once the price of the SPY500 drops a certain level, we will sell all the stocks
-    '''
 
     return rates < r
 
@@ -268,7 +254,6 @@ def portfolio_active(rates, stocks, benchmark, indices, label='SPY', empty=False
     if empty:
         benchmark[f'{label}_mean'] = benchmark[f'{label}'].rolling(21).mean()
 
-    #
     for r, bound in ((-2, None), (-2, (0, np.inf)), (-1, (0, np.inf)), (-3, None), (-4, None), (-5, None)):
 
         ts = []
@@ -334,31 +319,27 @@ def portfolio_active(rates, stocks, benchmark, indices, label='SPY', empty=False
 
     labels = [label, 'EW', 'GMV', 'GMV + Long Only', 'MSR + Long Only', 'IVP', 'HRP', 'TRP']
     plt.legend(labels)
-    plt.title('From Day {:d} to Day {:d} {} Option Hedging'.format(*indices, 'With' if empty else 'With'))
+    plt.title('From Day {:d} to Day {:d} {} Option Hedging'.format(*indices, 'Without'))
     plt.show()
 
 
 if __name__ == '__main__':
+
     """
     mark = 'ETF50'
     tks = ['601398.SS', '600028.SS', '600019.SS', '600018.SS', '600050.SS',
            '600519.SS', '000063.SZ', '002024.SZ', '000839.SZ', '600177.SS']
     """
 
-
     mark, tks = 'SPY', ['BA', 'CSCO', 'DHI', 'DIS', 'JNJ', 'JPM', 'KO', 'MSFT', 'NEE', 'XOM']
 
     stks, bm = import_data(tks, mark)
-    # moment = momentum(bm.copy())
-    z = zscore(bm.copy())
+
     rs = stks.pct_change().shift(-1).dropna()
-    #moment = momentum(rs.copy())
-    #z = zscore(rs.copy())
-    #wd = withdrawal(rs.copy())
     stks = stks.shift(-1).dropna()
     bm = bm.shift(-1).dropna()
 
-    idxs = (0, 3028)
+    idxs = (0, 252)
 
     portfolio_passive(stks.copy(), bm.copy())
     portfolio_active(rs, stks, bm, idxs, mark)
